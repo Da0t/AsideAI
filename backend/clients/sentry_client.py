@@ -1,17 +1,25 @@
-"""Sentry client — RELIABILITY.
+"""Sentry client — RELIABILITY (monitors this laptop orchestrator).
 
-Init Sentry for the backend and capture errors/performance. Insurance for demo
-day; it must never slow or block the live loop.
-
-TODO: implement. This is a scaffold stub.
+Init Sentry if SENTRY_DSN is set and sentry_sdk is installed; otherwise a no-op,
+so the backend runs with no install. It must never slow or block the live loop.
 """
 
+import logging
 
-def init() -> None:
-    """Initialize Sentry from SENTRY_DSN (no-op if unset).
+from ..config import config
 
-    TODO:
-      - sentry_sdk.init(dsn=SENTRY_DSN, ...) if DSN present
-      - light performance tracing on the live loop (don't add latency)
-    """
-    raise NotImplementedError("TODO: Sentry init")
+log = logging.getLogger("sentry")
+
+
+def init() -> bool:
+    """Initialize Sentry; return True if active, False if disabled/unavailable."""
+    if not config.sentry_dsn:
+        return False
+    try:
+        import sentry_sdk  # optional dependency
+    except ImportError:
+        log.info("sentry_sdk not installed — monitoring disabled")
+        return False
+    sentry_sdk.init(dsn=config.sentry_dsn, traces_sample_rate=0.1)
+    log.info("Sentry initialized")
+    return True

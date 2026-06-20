@@ -31,22 +31,21 @@ someone walking in with coffee — becomes:
 ## Three-Component Architecture
 
 ```
-┌──────────────┐        video (LiveKit)        ┌──────────────┐
-│  firmware/   │ ────────────────────────────▶ │  Overshoot   │
-│ Raspberry Pi │                                │  (vision)    │
-│  camera+mic  │ ───── audio ─────┐             └──────┬───────┘
-└──────────────┘                  │                    │ scene
-                                  ▼                    ▼
-                          ┌─────────────────────────────────┐
-                          │            backend/             │
-                          │  Overshoot scene + Deepgram STT │
-                          │  + active personality (Redis)   │
-                          │      → Claude Haiku (line)       │
-                          │      → Deepgram TTS (voice)      │
-                          │   Redis = memory + state         │
-                          │   Sentry = reliability           │
-                          └────────────────┬────────────────┘
-                                           │ voice audio
+┌────────────────────────────┐   frame ─┐  audio ─┐  TFLite events ─┐
+│ firmware/  Raspberry Pi     │          │         │  (entrance/wave/ │
+│ (QNX, C++)                  │          │         │   fall → cue)    │
+│ QSF camera + mic + TFLite   │          ▼         ▼                 ▼
+└────────────────────────────┘   ════════ LAN (Wi-Fi) ════════════════
+                          ┌─────────────────────────────────────────┐
+                          │        backend/  (laptop, Python)        │
+                          │  frame → Claude Haiku (vision = eyes +   │
+                          │      brain, one call → SHORT line)       │
+                          │  + Deepgram STT + active personality     │
+                          │      (Redis) → Deepgram TTS (voice)      │
+                          │   Redis = memory + state                 │
+                          │   Sentry = reliability                   │
+                          └────────────────┬────────────────────────┘
+                                  voice audio │ + cue signals
                                            ▼
                                   ┌──────────────────┐
                                   │    frontend/     │
@@ -57,15 +56,20 @@ someone walking in with coffee — becomes:
                                   └──────────────────┘
 ```
 
-- **`firmware/`** (Raspberry Pi, Python) — captures camera video + mic audio,
-  publishes video to Overshoot via LiveKit, sends audio to the backend, keeps
-  the stream alive.
-- **`backend/`** (Python) — the central hub, running **on the Pi as the on-device
-  orchestrator** (co-located with `firmware/`, not a separate server). Pulls a
-  scene description from Overshoot, speech from Deepgram STT, and the active
-  personality from Redis; builds a personality prompt; calls Claude Haiku for a
-  short in-character line (and a music-cue decision); sends it to Deepgram TTS for
-  voice audio. Holds memory + state in Redis, monitored by Sentry device-side.
+**Deployment:** the Pi (QNX, C++) captures + runs on-device triggers; a **laptop**
+(Python) runs the orchestrator and calls the cloud. They talk over the LAN.
+
+- **`firmware/`** (Raspberry Pi, **QNX, C++**) — captures camera frames via **QSF**
+  + mic audio, runs **TensorFlow Lite** on-device for fast event detection
+  (entrance, wave, fall), and ships frames / audio / event signals to the laptop
+  backend **over the LAN**.
+- **`backend/`** (Python, on a **laptop** on the same LAN) — the orchestrator.
+  Sends the camera **frame directly to Claude Haiku 4.5 (vision)** — one call
+  returns the in-character line, so Claude is both eyes and brain. Pulls speech
+  from Deepgram STT and the active personality from Redis, builds the prompt, and
+  sends the line to Deepgram TTS for voice audio. Holds memory + state in Redis,
+  monitored by Sentry. (Running the orchestrator on the laptop keeps the cloud
+  SDKs off QNX.)
 - **`frontend/`** (React Native / Expo) — personality + mode switcher, custom
   personality builder, audio output with a manager that ducks/cuts music under
   narration (voice has priority), and manual cue buttons (entrance theme, laugh
@@ -75,25 +79,34 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full pipeline.
 
 ## Service → Job
 
-| Service          | Job in the system                       |
+| Service / piece  | Job in the system                       |
 | ---------------- | --------------------------------------- |
-| **Overshoot**    | Vision / eyes (scene description)       |
+| **Claude Haiku** | Vision **+** narration — eyes + brain (frame + prompt → short in-character line, one call) |
 | **Deepgram**     | STT + TTS (ears + voice)                |
-| **Claude Haiku** | Narration / brain (short in-character line) |
-| **Redis**        | Memory + state (callbacks, active personality/mode) |
-| **Sentry**       | Reliability (backend monitoring)        |
+| **TFLite / QSF** | On-device event triggers (entrance/wave/fall → instant cues) — runs on the Pi (QNX) |
+| **Redis**        | Memory + state (callbacks, active personality/mode) — on the laptop |
+| **Sentry**       | Reliability (monitors the laptop orchestrator) |
 | **Midjourney**   | Async illustrated "journal" (off the live path) |
+
+> **Overshoot** was the original "eyes" but is no longer used — Claude vision
+> replaced it and folded scene understanding into the same call as the narration.
+> **MediaPipe** was the planned on-device trigger but doesn't build on QNX —
+> **TensorFlow Lite via QSF** replaced it (proven by QNX's `ai-camera-app`).
 
 ## Build Order (short version)
 
 Build the live loop first, make it fast, then layer personality and polish on top.
 
-1. **Firmware camera → Overshoot scene descriptions** — prove we can see.
-2. **Full core loop** — scene → Claude → Deepgram → audio. Measure latency.
+1. **Firmware camera → laptop → Claude vision** — Pi sends a frame over the LAN;
+   laptop sends it to Claude Haiku → a text scene. Prove we can see.
+2. **Full core loop** — frame → laptop → Claude (line) → Deepgram → audio. Measure
+   latency.
 3. **Personality system** — the swappable bundles.
 4. **Music/SFX + frontend** — cue buttons, ducking audio manager.
 5. **Redis memory** — narration history (callbacks) + shared state.
-6. **Journal (Midjourney)** — async, last, cuttable.
+6. **TFLite triggers** — on-device event detection on the Pi → auto-fire cues
+   (cuttable; fork QNX's `ai-camera-app`).
+7. **Journal (Midjourney)** — async, last, cuttable.
 
 Full sequencing and what's cuttable: [docs/BUILD_ORDER.md](docs/BUILD_ORDER.md).
 

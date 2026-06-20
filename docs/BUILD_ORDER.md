@@ -8,29 +8,31 @@ demoable. Cuttable steps are marked so you can stop early and still have a demo.
 
 ---
 
-## 1. Firmware camera → Overshoot scene descriptions ⭐
+## 1. Firmware camera → laptop → Claude vision ⭐
 
 **Goal:** prove the system can *see*.
 
-- Firmware: capture camera frames, create an Overshoot stream (get LiveKit room
-  URL + token), publish video via the LiveKit SDK, add keepalive so the stream
-  doesn't die (~5 min TTL).
-- Backend: ask Overshoot for a scene description of the latest frame
-  (`ovs://streams/{stream_id}?frame_index=-1`).
+- Firmware (Pi, QNX, C++): capture a camera frame via **QSF** and send it to the
+  laptop backend over the **LAN** (TCP). No streaming, no LiveKit, no keepalive.
+  Fastest start: fork [`qnx/projects/ai-camera-app`](https://gitlab.com/qnx/projects/ai-camera-app).
+- Backend (laptop, Python): receive the frame, send it to Claude Haiku 4.5 as
+  **image input**, and print the scene it describes. (This same call later returns
+  the in-character line — eyes and brain are one request.)
 
-**Done when:** you can point the camera at a room and print a text description of
-what's happening.
+**Done when:** you can point the camera at a room and the laptop prints a text
+description of what's happening. (Confirms QSF capture + LAN transport + Claude
+vision in one shot.)
 
 **Cut line:** none — this is the foundation.
 
 ---
 
-## 2. Full core loop: scene → Claude → Deepgram → audio ⭐
+## 2. Full core loop: frame → Claude → Deepgram → audio ⭐
 
 **Goal:** the end-to-end magic, in one neutral voice. No personalities yet.
 
-- Backend orchestration: scene description → Claude Haiku (short line) → Deepgram
-  TTS (voice audio) → play it.
+- Backend orchestration (laptop): camera frame (from the Pi over the LAN) → Claude
+  Haiku (vision → short line) → Deepgram TTS (voice audio) → play it.
 - Add mic → Deepgram STT so speech in the room can feed the line too.
 - **Measure latency.** Time each hop. This is the moment to find out if you're at
   1–2s or 6s. Tighten before adding anything else: shrink payloads, lower
@@ -103,7 +105,29 @@ narration occasionally calls back to something earlier.
 
 ---
 
-## 6. Journal (Midjourney) ✂️
+## 6. TFLite event triggers (on-device) ✂️
+
+**Goal:** auto-fire cues from what the camera sees — no button press.
+
+- Firmware (Pi, QNX, C++): run **TensorFlow Lite via QSF** on-device to detect
+  events — person enters frame, waves, falls — and signal the laptop backend over
+  the LAN: "narrate now" + "fire the entrance cue". Fork
+  [`qnx/projects/ai-camera-app`](https://gitlab.com/qnx/projects/ai-camera-app)
+  (QSF + TFLite on QNX SDP 8.0 / Pi 4) and swap its face-detection model for a
+  person/pose/gesture `.tflite`.
+- Backend/frontend: the event routes through the laptop backend to the frontend,
+  which fires the pre-loaded cue instantly (same path as a manual button).
+
+**Done when:** walking into frame auto-plays the entrance theme and prompts a line.
+
+**Cut line:** the whole step is ✂️. TFLite is only the *trigger*, not the eyes
+(Claude vision does the seeing). **TFLite via QSF is the QNX-native path** (this is
+why MediaPipe — Linux/Android/iOS only — was dropped). If the model work runs long,
+fall back to OpenCV motion detection or just keep the manual cue buttons.
+
+---
+
+## 7. Journal (Midjourney) ✂️
 
 **Goal:** an illustrated souvenir of the session.
 
@@ -120,9 +144,9 @@ narration occasionally calls back to something earlier.
 
 ## Cross-cutting: Sentry
 
-Wire **Sentry** into the backend early (cheap to add, instrument as you build
-step 2). It's reliability insurance for demo day, not a feature — don't let it
-block the live loop.
+Wire **Sentry** into the laptop backend early (cheap to add, instrument as you
+build step 2). It monitors the orchestrator — reliability insurance for demo day,
+not a feature — don't let it block the live loop.
 
 ---
 
@@ -130,13 +154,14 @@ block the live loop.
 
 | # | Step                                  | Priority | Cuttable?            |
 | - | ------------------------------------- | -------- | -------------------- |
-| 1 | Firmware camera → Overshoot scene     | ⭐ core   | no                   |
-| 2 | Core loop: scene → Claude → TTS → audio | ⭐ core | no                   |
-| 3 | Personality system (5 built-ins)      | ⭐ core   | no                   |
+| 1 | Firmware camera → Claude vision       | ⭐ core   | no                   |
+| 2 | Core loop: frame → Claude → TTS → audio | ⭐ core | no                   |
+| 3 | Personality system (3 built-ins)      | ⭐ core   | no                   |
 | 3b| Custom personality builder            | nice     | ✂️ yes               |
 | 4 | Music/SFX + frontend switcher + ducking | ⭐ core | switcher+duck no; auto-reactions ✂️ |
 | 5 | Redis state                           | ⭐ core   | state no; callbacks ✂️ |
-| 6 | Journal (Midjourney)                  | nice     | ✂️ yes (build last)  |
+| 6 | TFLite event triggers on the Pi (auto-cues) | nice | ✂️ yes (fork ai-camera-app) |
+| 7 | Journal (Midjourney)                  | nice     | ✂️ yes (build last)  |
 
 **If you build nothing else, build steps 1 + 2 + 3.** That's the pitch:
 *same moment, different narration, out loud.*
