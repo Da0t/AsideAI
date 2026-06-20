@@ -1,0 +1,22 @@
+{
+  "$schema_note": "Template + schema for a personality bundle. Copy this file to personalities/<slug>.json and fill it in. See ../docs/PERSONALITIES.md for the step-by-step.",
+
+  "name": "TODO: Human-readable name shown in the app switcher",
+  "slug": "todo-kebab-case-slug",
+  "_slug_note": "Unique, kebab-case. MUST match the folder name in assets/sounds/<slug>/.",
+
+  "claude_system_prompt": "TODO: Write the character. Define tone, vocabulary, and quirks. CRITICAL: demand SHORT output — one or two punchy sentences. The backend also enforces a low max_tokens.",
+
+  "deepgram_voice": "TODO: Deepgram TTS voice id that fits the character",
+  "_voice_note": "Pick a Deepgram voice; this is the literal sound of the narration.",
+
+  "sound_cues": {
+    "_note": "Map each cue name (see assets/sounds/manifest.json) to a file in this personality's sound folder. Only the ACTIVE personality's cues fire. Missing cues simply won't play.",
+    "entrance": "TODO: entrance.mp3",
+    "laugh_track": "TODO: laugh_track.mp3"
+  },
+
+  "mode_hints": {
+    "_note": "Optional. Per-mode tweaks to behavior (e.g. narrate less often in a quiet mode). Final mode list is a build-time decision — see docs/PERSONALITIES.md."
+  }
+}

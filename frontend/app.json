@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "The Narrator",
+    "slug": "the-narrator",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "android": {
+      "permissions": []
+    },
+    "_comment": "TODO: icons/splash assets, bundle identifiers, and audio background mode config during build. iOS UIBackgroundModes:audio lets narration keep playing."
+  }
+}

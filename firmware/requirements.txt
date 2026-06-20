@@ -1,0 +1,18 @@
+# firmware/ dependencies (Raspberry Pi, Python)
+# Pin versions during build. Scaffold lists intent only.
+
+# --- Video publishing to Overshoot over LiveKit ---
+livekit            # LiveKit client SDK (publish camera video to the stream)
+
+# --- Camera + mic capture ---
+# picamera2        # Raspberry Pi camera (uncomment on-device)
+opencv-python      # frame capture / fallback camera access
+sounddevice        # mic audio capture
+numpy              # frame/audio buffers
+
+# --- Talking to the backend ---
+websockets         # stream mic audio to backend
+requests           # create Overshoot stream, keepalive pings
+
+# --- Config ---
+python-dotenv      # load .env

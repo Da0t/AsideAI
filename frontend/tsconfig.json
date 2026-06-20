@@ -1,0 +1,7 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true
+  },
+  "_comment": "TODO: confirm 'expo/tsconfig.base' resolves after expo install during build."
+}

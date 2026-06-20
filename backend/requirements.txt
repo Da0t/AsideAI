@@ -1,0 +1,20 @@
+# backend/ dependencies (Python)
+# Pin versions during build. Scaffold lists intent only.
+
+# --- Services ---
+anthropic          # Claude Haiku (narration / brain)
+deepgram-sdk       # STT (ears) + TTS (voice)
+openai             # Overshoot is OpenAI-compatible chat completions
+redis              # memory + state (active personality/mode, history)
+sentry-sdk         # reliability (errors + performance)
+
+# --- Server / live loop ---
+fastapi            # HTTP + WebSocket to firmware (audio in) and frontend (audio out)
+uvicorn            # ASGI server
+websockets         # streaming audio in/out
+
+# --- Config ---
+python-dotenv      # load .env
+
+# --- Journal (async, build last) ---
+# midjourney client TBD  # off the hot path; see journal/midjourney.py

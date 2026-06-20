@@ -1,0 +1,46 @@
+{
+  "_note": "Canonical list of sound cues every personality is expected to provide. Each personality has its own folder (assets/sounds/<slug>/) with files for these cues. Only the ACTIVE personality's sounds fire. Cues are PRE-LOADED and fire instantly from the frontend — never generated live. A personality may omit a cue (it just won't fire) or add extras.",
+
+  "cues": {
+    "entrance": {
+      "description": "Plays when someone enters / on the manual 'entrance theme' button. The personality's signature arrival music.",
+      "type": "music",
+      "trigger": "manual button + (optional) entrance event"
+    },
+    "laugh_track": {
+      "description": "Manual button. Sitcom-style laughter for a comedic beat.",
+      "type": "sfx",
+      "trigger": "manual button"
+    },
+    "sting": {
+      "description": "Short dramatic punctuation under/after a big line (quest-complete chime, hype air horn, tender reassurance swell).",
+      "type": "sfx",
+      "trigger": "manual button + (optional) reaction"
+    },
+    "theme_loop": {
+      "description": "Low background music bed for this personality. The AudioManager DUCKS this under narration.",
+      "type": "music",
+      "trigger": "ambient (loops while personality active)"
+    }
+  },
+
+  "expected_files_per_personality": {
+    "entrance": "entrance.mp3",
+    "laugh_track": "laugh_track.mp3",
+    "sting": "sting.mp3",
+    "theme_loop": "theme_loop.mp3"
+  },
+
+  "personalities": [
+    "hype-man",
+    "goth-mommy",
+    "epic-quest-narrator"
+  ],
+
+  "rules": [
+    "Pre-loaded only — no live generation.",
+    "Only the active personality's sounds fire.",
+    "Missing cue files simply don't play.",
+    "Custom personalities reuse a shared/neutral cue set (no shipped audio) — build-time decision."
+  ]
+}

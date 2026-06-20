@@ -1,0 +1,86 @@
+# ─── Secrets ────────────────────────────────────────────────────────────────
+.env
+.env.local
+*.local
+secrets.json
+
+# ─── Python (firmware/ + backend/) ──────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ─── Node / Expo (frontend/) ────────────────────────────────────────────────
+node_modules/
+.expo/
+.expo-shared/
+dist/
+web-build/
+*.tsbuildinfo
+
+# Native builds
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+ios/
+android/
+
+# Metro
+.metro-health-check*
+
+# ─── Logs ───────────────────────────────────────────────────────────────────
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+logs/
+
+# ─── Generated audio / journal artifacts ────────────────────────────────────
+# Pre-loaded source SFX/music ARE committed (assets/sounds/**). These are runtime
+# outputs only.
+*.tmp.wav
+*.tmp.mp3
+journal_out/
+
+# ─── Editor / OS ────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+Thumbs.db

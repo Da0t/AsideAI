@@ -1,0 +1,28 @@
+{
+  "name": "the-narrator-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Narrator — React Native / Expo control app: personality + mode switcher, custom personality builder, audio output with ducking, manual cue buttons. Scaffold only.",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "expo": "*",
+    "expo-av": "*",
+    "expo-status-bar": "*",
+    "react": "*",
+    "react-native": "*",
+    "@react-navigation/native": "*",
+    "@react-navigation/native-stack": "*"
+  },
+  "devDependencies": {
+    "@babel/core": "*",
+    "@types/react": "*",
+    "typescript": "*"
+  },
+  "_comment": "TODO: pin versions to a matching Expo SDK during build (expo-av handles audio playback + ducking)."
+}
