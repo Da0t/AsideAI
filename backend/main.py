@@ -46,6 +46,8 @@ class Hub:
         self.bundles = personalities.load_all()
         if redis_client.get_active_personality() is None:
             redis_client.set_active_personality(personalities.default_slug(self.bundles))
+        if redis_client.get_mode() is None:
+            redis_client.set_mode("chatty")
 
         self._lock = threading.Lock()
         self.latest_frame = None
@@ -53,6 +55,7 @@ class Hub:
         self.pending_event = None
         self.phone = NoopPhone()
         self.play_audio = False  # play narration out loud on this laptop (afplay)
+        self.running = True       # phone can pause/resume narration (set_running)
 
     # --- inbound from the Pi (called by the TCP handler) ---
 
@@ -304,7 +307,16 @@ def _start_phone(hub: Hub):
     return WebSocketPhone(hub, config.phone_ws_port)
 
 
-def run_serve(play: bool = False) -> int:
+def run_serve(play: bool = False, use_mic: bool = False, interval: float = None) -> int:
+    """The live phone-connected mode: serve the phone WS + the Pi TCP socket, and
+    narrate continuously from the Pi (when connected) or the laptop webcam.
+
+    The phone switches personality/mode, sees the live line, plays the voice, and
+    pauses/resumes (set_running). Frames come from the Pi if present, else a
+    persistent laptop webcam. Default cadence is back-to-back (realtime); pass
+    --interval to add a gap. --play also speaks on the laptop (else the phone is
+    the speaker).
+    """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
     sentry_client.init()
     hub = Hub()
@@ -313,21 +325,46 @@ def run_serve(play: bool = False) -> int:
 
     server = make_tcp_server(hub)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    log.info("listening for the Pi on %s:%s · %s",
-             config.firmware_host, config.firmware_port, config.summary())
 
-    def fallback_frame():
-        return frame_source.webcam_frame() or frame_source.mock_frame()
+    # Persistent laptop webcam as the local stand-in until the Pi sends frames.
+    cam = frame_source.open_webcam(max_dim=config.frame_max_dim)
+    if cam is not None and not cam.opened():
+        cam.close()
+        cam = None
+    if use_mic and not mic.available():
+        log.info("mic requested but unavailable (pip install sounddevice) — vision only")
+        use_mic = False
+    gap = 0.0 if interval is None else interval  # default: narrate back-to-back
+
+    log.info("phone WS on :%s · Pi on %s:%s · webcam=%s mic=%s · %s",
+             config.phone_ws_port, config.firmware_host, config.firmware_port,
+             "on" if cam else "off", "on" if use_mic else "off", config.summary())
+
+    def local_frame():
+        if cam is not None:
+            f = cam.read()
+            if f:
+                return f
+        return frame_source.mock_frame()
 
     try:
         while True:
-            hub.take_event()  # (events also auto-fire cues on arrival)
-            frame = hub.take_frame(fallback_frame)
-            res = hub.narrate_once(frame)
+            if not hub.running:           # phone paused narration
+                time.sleep(0.15)
+                continue
+            if use_mic:
+                deepgram_stt.transcribe(mic.record(gap if gap > 0 else 4.0))
+            hub.take_event()              # (events also auto-fire cues on arrival)
+            frame = hub.take_frame(local_frame)   # Pi frame if present, else webcam
+            res = hub.narrate_once(frame)         # broadcasts line + voice to the phone
             log.info("%s → %s (%.0fms)", res["personality"], res["line"], res["ms"]["total"])
-            time.sleep(config.loop_interval_sec)
+            if not use_mic and gap > 0:
+                time.sleep(gap)
     except KeyboardInterrupt:
         log.info("shutting down")
+    finally:
+        if cam is not None:
+            cam.close()
         server.shutdown()
     return 0
 
@@ -362,7 +399,7 @@ def main(argv=None) -> int:
     if args.webcam:
         return run_webcam(args.personality, args.interval, use_mic=args.mic)
     if args.serve:
-        return run_serve(play=args.play)
+        return run_serve(play=args.play, use_mic=args.mic, interval=args.interval)
     return run_mock(args.iterations, args.image, play=args.play)  # default = mock
 
 

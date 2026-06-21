@@ -64,14 +64,17 @@ the LAN. JSON text messages, except voice audio which is sent as a binary frame
 (or a base64 field — pick one at build time; this spec uses a binary frame
 preceded by a small JSON header).
 
+All messages are **JSON text** (no binary frames — keeps the React Native client
+simple). Voice audio rides as base64 inside the `voice` message.
+
 ### laptop → phone
 
-| `type`    | fields                          | meaning                                        |
-| --------- | ------------------------------- | ---------------------------------------------- |
-| `voice`   | `{ format, seq }` + binary audio | a narration line to play (voice has priority — duck music) |
-| `cue`     | `{ name }`                      | fire a pre-loaded cue now (entrance/laugh/…); from an event or another client |
-| `state`   | `{ personality, mode }`         | current active personality/mode (on connect + on change) |
-| `line`    | `{ text, personality }`         | the narration text (optional — for captions/journal)     |
+| `type`    | fields                                    | meaning                                        |
+| --------- | ----------------------------------------- | ---------------------------------------------- |
+| `state`   | `{ personality, mode, running }`          | current active personality/mode + whether narration is running (on connect + on every change) |
+| `line`    | `{ text, personality }`                   | the narration text just spoken (live captions) |
+| `voice`   | `{ audio (base64), mime, personality }`   | the narration audio to play (voice has priority — duck music) |
+| `cue`     | `{ name }`                                | fire a pre-loaded cue now (entrance/laugh/…); from an event or another client |
 
 ### phone → laptop
 
@@ -79,6 +82,7 @@ preceded by a small JSON header).
 | ------------------- | ----------------------- | ---------------------------------------- |
 | `set_personality`   | `{ slug }`              | switch active personality (backend writes Redis) |
 | `set_mode`          | `{ mode }`              | switch mode                              |
+| `set_running`       | `{ running }`           | pause/resume narration (the phone's Go Live / play-pause) |
 | `manual_cue`        | `{ name }`              | user tapped a cue button → fire SFX (echoed to all clients) |
 | `create_personality`| `{ bundle }`            | save a custom personality (same bundle shape as `personalities/*.json`) |
 

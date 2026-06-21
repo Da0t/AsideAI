@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Pressable } from 'react-native';
 import { useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -72,16 +72,17 @@ export default function HomeScreen() {
           accentColor={activeTheme.accent}
         />
 
-        {/* Filter chips */}
+        {/* Mode chips (tap to switch narration intensity) */}
         <View style={styles.chipsRow}>
           {modes.map((m) => (
-            <Chip
-              key={m.value}
-              variant={mode === m.value ? 'solid' : 'outline'}
-              style={mode === m.value ? { backgroundColor: colors.surfaceCard2 } : undefined}
-            >
-              {m.label}
-            </Chip>
+            <Pressable key={m.value} onPress={() => setMode(m.value)}>
+              <Chip
+                variant={mode === m.value ? 'solid' : 'outline'}
+                style={mode === m.value ? { backgroundColor: colors.surfaceCard2 } : undefined}
+              >
+                {m.label}
+              </Chip>
+            </Pressable>
           ))}
           <IconButton size="sm" variant="ghost" onPress={() => nav.navigate('Builder')}>
             <Plus size={18} color={colors.textMuted} />

@@ -17,7 +17,7 @@ import { colors, fonts, textSize } from '../theme/tokens';
 export default function LiveScreen() {
   const nav = useNavigation();
   const insets = useSafeAreaInsets();
-  const { activePersonality, playing, togglePlaying } = useTheme();
+  const { activePersonality, playing, togglePlaying, liveLine, fireCue } = useTheme();
 
   const t = getTheme(activePersonality.theme);
   const lines = liveLines[activePersonality.slug] ?? [activePersonality.sampleLine];
@@ -25,19 +25,31 @@ export default function LiveScreen() {
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Prefer the real backend narration line; fall back to the demo cycler when
+  // the backend hasn't pushed anything yet (offline / not yet narrating).
+  const useBackendLine = liveLine != null;
+  const displayLine = liveLine ?? lines[lineIdx];
+
+  // Demo cycler — only runs when NOT receiving live lines from the backend.
   useEffect(() => {
-    if (playing) {
-      intervalRef.current = setInterval(() => {
-        Animated.timing(fadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
-          setLineIdx((i) => (i + 1) % lines.length);
-          Animated.timing(fadeAnim, { toValue: 1, duration: 400, easing: Easing.out(Easing.ease), useNativeDriver: true }).start();
-        });
-      }, 4200);
-    }
+    if (useBackendLine || !playing) return;
+    intervalRef.current = setInterval(() => {
+      Animated.timing(fadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+        setLineIdx((i) => (i + 1) % lines.length);
+        Animated.timing(fadeAnim, { toValue: 1, duration: 400, easing: Easing.out(Easing.ease), useNativeDriver: true }).start();
+      });
+    }, 4200);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [playing, lines.length, fadeAnim]);
+  }, [useBackendLine, playing, lines.length, fadeAnim]);
+
+  // Fade each new backend line in as it arrives.
+  useEffect(() => {
+    if (liveLine == null) return;
+    fadeAnim.setValue(0);
+    Animated.timing(fadeAnim, { toValue: 1, duration: 400, easing: Easing.out(Easing.ease), useNativeDriver: true }).start();
+  }, [liveLine, fadeAnim]);
 
   return (
     <View style={[styles.root, { backgroundColor: colors.bgApp }]}>
@@ -73,7 +85,7 @@ export default function LiveScreen() {
 
         <View style={styles.lineContainer}>
           <Animated.Text style={[styles.line, { opacity: fadeAnim }]}>
-            {'"'}{lines[lineIdx]}{'"'}
+            {'"'}{displayLine}{'"'}
           </Animated.Text>
         </View>
 
@@ -96,6 +108,7 @@ export default function LiveScreen() {
                 surface2Color={colors.surfaceCard2}
                 inkColor={colors.textPrimary}
                 icon={<CueIcon name={c.icon} size={20} color={t.accent} />}
+                onFire={() => fireCue(c.id)}
               />
             </View>
           ))}

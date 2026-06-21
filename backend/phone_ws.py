@@ -9,6 +9,7 @@ here) — verify during frontend integration.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import threading
@@ -37,13 +38,17 @@ class WebSocketPhone:
         await websockets.serve(self._handler, "0.0.0.0", self.port)
         log.info("phone WS listening on 0.0.0.0:%s", self.port)
 
-    async def _handler(self, ws, *_args) -> None:
-        self.clients.add(ws)
-        await ws.send(json.dumps({
+    def _state(self) -> dict:
+        return {
             "type": "state",
             "personality": redis_client.get_active_personality(),
             "mode": redis_client.get_mode(),
-        }))
+            "running": bool(getattr(self.hub, "running", True)),
+        }
+
+    async def _handler(self, ws, *_args) -> None:
+        self.clients.add(ws)
+        await ws.send(json.dumps(self._state()))  # send current state on connect
         try:
             async for raw in ws:
                 if isinstance(raw, (bytes, bytearray)):
@@ -58,13 +63,13 @@ class WebSocketPhone:
         t = msg.get("type")
         if t == "set_personality":
             redis_client.set_active_personality(msg.get("slug", ""))
-            self.broadcast({"type": "state", "personality": msg.get("slug"),
-                            "mode": redis_client.get_mode()})
+            self.broadcast(self._state())
         elif t == "set_mode":
             redis_client.set_mode(msg.get("mode", ""))
-            self.broadcast({"type": "state",
-                            "personality": redis_client.get_active_personality(),
-                            "mode": msg.get("mode")})
+            self.broadcast(self._state())
+        elif t == "set_running":
+            self.hub.running = bool(msg.get("running", True))
+            self.broadcast(self._state())
         elif t == "manual_cue":
             self.broadcast({"type": "cue", "name": msg.get("name", "")})
         elif t == "create_personality":
@@ -78,8 +83,13 @@ class WebSocketPhone:
         self._send_all(json.dumps(msg))
 
     def broadcast_voice(self, audio: bytes, meta: dict) -> None:
-        self._send_all(json.dumps({"type": "voice", **meta}))  # header
-        self._send_all(audio)                                   # binary audio frame
+        # base64-in-JSON (one message) — robust for React Native WebSocket clients.
+        self._send_all(json.dumps({
+            "type": "voice",
+            "audio": base64.b64encode(audio).decode("ascii"),
+            "mime": "audio/mpeg",  # Deepgram TTS default container
+            "personality": meta.get("personality"),
+        }))
 
     def _send_all(self, data) -> None:
         if not self.clients:
