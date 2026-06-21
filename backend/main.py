@@ -27,6 +27,11 @@ from .clients import claude, deepgram_tts, deepgram_stt, redis_client, sentry_cl
 
 log = logging.getLogger("narrator")
 
+# Audio the Pi ships over the LAN: s16le mono @ 16 kHz (matches Deepgram STT). The
+# Hub keeps a bounded rolling window so STT always sees the most recent few seconds.
+PI_AUDIO_RATE = 16000
+PI_AUDIO_KEEP_SEC = 10
+
 
 def _is_skip(line: str) -> bool:
     """True if the model chose to stay silent this round (returned SKIP).
@@ -76,6 +81,9 @@ class Hub:
         self.phone = NoopPhone()
         self.play_audio = False  # play narration out loud on this laptop (afplay)
         self.running = True       # phone can pause/resume narration (set_running)
+        self.spoke_this_session = False  # force an establishing line once per run
+        self.watcher = None       # set by the live loop; lets Pi events wake narration
+        self.frame_source = None  # "pi" | "local" — origin of the last frame served
 
     # --- inbound from the Pi (called by the TCP handler) ---
 
@@ -86,6 +94,9 @@ class Hub:
     def on_audio(self, pcm: bytes) -> None:
         with self._lock:
             self.audio_buf.extend(pcm)
+            cap = PI_AUDIO_RATE * 2 * PI_AUDIO_KEEP_SEC  # keep only the last ~10s
+            if len(self.audio_buf) > cap:
+                del self.audio_buf[: len(self.audio_buf) - cap]
 
     def on_event(self, ev: dict) -> None:
         with self._lock:
@@ -93,6 +104,11 @@ class Hub:
         cue = ev.get("cue")
         if cue:  # fire the cue to the phone instantly (the cinematic-entrance beat)
             self.phone.broadcast({"type": "cue", "name": cue})
+        log.info("Pi event: kind=%s cue=%s narrate_now=%s",
+                 ev.get("kind"), cue or "-", ev.get("narrate_now"))
+        # "narrate now" interrupts a quiet wait so the line lands on the moment.
+        if ev.get("narrate_now") and self.watcher is not None:
+            self.watcher.wake()
 
     # --- accessors ---
 
@@ -101,32 +117,57 @@ class Hub:
         return self.bundles.get(slug) or next(iter(self.bundles.values()))
 
     def take_frame(self, fallback) -> bytes:
+        """Latest Pi frame if one has arrived, else the local fallback (laptop webcam,
+        or None in Pi-only mode). Records which source supplied it for logging."""
         with self._lock:
             frame = self.latest_frame
-        return frame if frame is not None else fallback()
+        if frame is not None:
+            self.frame_source = "pi"
+            return frame
+        self.frame_source = "local"
+        return fallback()
+
+    def clear_frame(self) -> None:
+        """Drop the last Pi frame (on disconnect) so we don't narrate a stale view."""
+        with self._lock:
+            self.latest_frame = None
 
     def take_event(self):
         with self._lock:
             ev, self.pending_event = self.pending_event, None
         return ev
 
+    def take_audio(self, seconds: float) -> bytes:
+        """Most recent `seconds` of audio the Pi has streamed (b'' if none yet)."""
+        n = int(PI_AUDIO_RATE * seconds) * 2
+        with self._lock:
+            return bytes(self.audio_buf[-n:]) if self.audio_buf else b""
+
     # --- one narration cycle (timed) ---
 
-    def narrate_once(self, frame: bytes, bundle: dict = None, decide: bool = False) -> dict:
+    def narrate_once(self, frame: bytes, bundle: dict = None, decide: bool = False,
+                     reason: str = None) -> dict:
         """Look at the frame and (optionally) decide whether to speak.
 
         With decide=True the model may return SKIP — in which case nothing is
-        voiced or broadcast (the narrator just keeps observing). Returns a dict
-        with `spoke` (bool) and, when spoken, the line.
+        voiced or broadcast (the narrator just keeps observing). `reason` is why we
+        looked ('change'/'first'/'timeout'): a 'timeout' is a quiet check-in on an
+        unchanged scene, so the model biases to SKIP. Returns a dict with `spoke`
+        (bool) and, when spoken, the line.
         """
         t0 = time.monotonic()
         bundle = bundle or self.active_bundle()
         speech = deepgram_stt.latest_transcript()
         history = redis_client.recent_lines()
-        # Always speak the first line (establish the scene); only become selective
-        # once there are recent lines that a new one might just repeat.
-        decide = decide and bool(history)
-        prompt = prompt_builder.build(bundle, frame, speech, history, decide=decide)
+        # Always speak the first line of THIS session (establish the scene), then
+        # become selective. Keyed on the session — NOT on Redis history being empty,
+        # since persistent memory across runs would otherwise suppress the opener and
+        # the narrator sits silent at startup.
+        if not self.spoke_this_session:
+            decide = False
+        static = reason == "timeout"   # quiet check-in, not a real change -> bias quiet
+        prompt = prompt_builder.build(bundle, frame, speech, history,
+                                      decide=decide, static=static)
         t1 = time.monotonic()
         line = claude.narrate(prompt)               # EYES + BRAIN (or "SKIP")
         t2 = time.monotonic()
@@ -139,6 +180,7 @@ class Hub:
             if self.play_audio:
                 audio_out.play(audio)  # blocks until the line finishes speaking
             redis_client.append_line(line)
+            self.spoke_this_session = True  # opener delivered; selective from here
             self.phone.broadcast({"type": "line", "text": line, "personality": bundle.get("slug")})
             self.phone.broadcast_voice(audio, {"personality": bundle.get("slug")})
         else:
@@ -165,10 +207,15 @@ def make_tcp_server(hub: Hub):
         def handle(self):
             log.info("firmware connected: %s", self.client_address)
             recv = protocol.socket_reader(self.request)
+            got_frame = False
             try:
                 while True:
                     mtype, payload = protocol.read_message(recv)
                     if mtype == protocol.FRAME:
+                        if not got_frame:
+                            log.info("📷 receiving camera frames from Pi %s — using the Pi camera",
+                                     self.client_address)
+                            got_frame = True
                         hub.on_frame(payload)
                     elif mtype == protocol.AUDIO:
                         hub.on_audio(payload)
@@ -176,6 +223,8 @@ def make_tcp_server(hub: Hub):
                         hub.on_event(protocol.decode_event(payload))
             except (EOFError, ConnectionError):
                 log.info("firmware disconnected: %s", self.client_address)
+            finally:
+                hub.clear_frame()  # stop using the Pi's last (now stale) frame
 
     class Server(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
@@ -305,14 +354,29 @@ def _live_loop(hub: "Hub", watcher: FrameWatcher, *, bundle: dict = None,
         if no_view:
             log.info("[%s] view restored", label)
             no_view = False
-        hub.take_event()                  # (events also auto-fire cues on arrival)
-        if rolling is not None:           # refresh the transcript from bg-captured audio
-            deepgram_stt.transcribe(rolling.recent(4.0))
-        res = hub.narrate_once(frame, bundle=bundle, decide=True)
+        # Audio: prefer the Pi's mic stream when it's feeding, else the laptop mic.
+        pi_audio = hub.take_audio(4.0)
+        if pi_audio:
+            audio, asrc = pi_audio, "pi"
+        elif rolling is not None:
+            audio, asrc = rolling.recent(4.0), "mic"
+        else:
+            audio, asrc = b"", None
+        if asrc is not None:              # refresh the transcript from captured audio
+            buffered = len(audio) / (PI_AUDIO_RATE * 2.0)
+            heard = deepgram_stt.transcribe(audio)
+            if buffered < 0.5:
+                log.warning("🎤 [%s] only %.1fs buffered — audio capture may not be "
+                            "working (check mic permission / device)", asrc, buffered)
+            elif heard:
+                log.info("🎤 [%s] heard: %r  (%.1fs in buffer)", asrc, heard, buffered)
+            else:
+                log.info("🎤 [%s] no speech  (%.1fs in buffer)", asrc, buffered)
+        res = hub.narrate_once(frame, bundle=bundle, decide=True, reason=reason)
         watcher.mark_consumed()           # measure further change from what we just saw
         if res["spoke"]:
-            log.info("%s → %s (%.0fms · %s)", res["personality"], res["line"],
-                     res["ms"]["total"], reason)
+            log.info("%s → %s (%.0fms · %s · cam=%s)", res["personality"], res["line"],
+                     res["ms"]["total"], reason, hub.frame_source)
             # Don't start the next line until this one has been spoken.
             wait = observe_gap if hub.play_audio else (
                 _estimate_speech_seconds(res["line"]) + observe_gap)
@@ -368,6 +432,7 @@ def run_webcam(personality_slug: str = None, interval: float = None,
     change_threshold = _resolve_threshold(sensitivity)
     observe_gap = 0.4 if interval is None else interval
     watcher = FrameWatcher(cam.read, fps=config.watch_fps).start()
+    hub.watcher = watcher
 
     mic_note = f" · 🎤 mic ON ({mic.device_name()})" if rolling is not None else ""
     print(f"[webcam] narrating live · personality={active} · change-gated "
@@ -402,7 +467,7 @@ def _start_phone(hub: Hub):
 
 
 def run_serve(play: bool = False, use_mic: bool = False, interval: float = None,
-              sensitivity: float = None) -> int:
+              sensitivity: float = None, no_webcam: bool = False) -> int:
     """The live phone-connected mode: serve the phone WS + the Pi TCP socket, and
     narrate from the Pi (when connected) or the laptop webcam.
 
@@ -413,6 +478,10 @@ def run_serve(play: bool = False, use_mic: bool = False, interval: float = None,
     a change is worth a line (SKIP otherwise). The phone switches personality/mode,
     sees the live line, plays the voice, and pauses/resumes. --play also speaks on the
     laptop (else the phone is the speaker); --sensitivity tunes the change threshold.
+
+    By default the laptop webcam is a fallback until the Pi sends frames. --no-webcam
+    is Pi-ONLY: it never opens the laptop camera and just waits for Pi frames — use it
+    on the wearable so the laptop's view can't silently stand in for the Pi camera.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
     sentry_client.init()
@@ -423,8 +492,9 @@ def run_serve(play: bool = False, use_mic: bool = False, interval: float = None,
     server = make_tcp_server(hub)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    # Persistent laptop webcam as the local stand-in until the Pi sends frames.
-    cam = frame_source.open_webcam(max_dim=config.frame_max_dim)
+    # Laptop webcam as a local stand-in until the Pi sends frames — unless --no-webcam
+    # (Pi-only: never touch the laptop camera; wait for the Pi).
+    cam = None if no_webcam else frame_source.open_webcam(max_dim=config.frame_max_dim)
     if cam is not None and not cam.opened():
         cam.close()
         cam = None
@@ -438,12 +508,17 @@ def run_serve(play: bool = False, use_mic: bool = False, interval: float = None,
 
     # Pi frame if present, else webcam — the watcher samples this continuously.
     watcher = FrameWatcher(lambda: hub.take_frame(local_frame), fps=config.watch_fps).start()
+    hub.watcher = watcher  # let Pi "narrate now" events wake the loop
 
-    log.info("phone WS on :%s · Pi on %s:%s · webcam=%s mic=%s · change-gated "
+    cam_mode = "off (Pi-only)" if no_webcam else ("fallback" if cam else "unavailable")
+    log.info("phone WS on :%s · Pi on %s:%s · laptop-cam=%s mic=%s · change-gated "
              "(thr=%.3f, %.0ffps, check-in %.0fs) · %s",
              config.phone_ws_port, config.firmware_host, config.firmware_port,
-             "on" if cam else "off", "on" if rolling is not None else "off",
+             cam_mode, "on" if rolling is not None else "off",
              change_threshold, config.watch_fps, config.quiet_checkin_sec, config.summary())
+    if no_webcam:
+        log.info("Pi-only mode: waiting for camera frames from the Pi on "
+                 "%s:%s …", config.firmware_host, config.firmware_port)
 
     try:
         _live_loop(hub, watcher, rolling=rolling, observe_gap=observe_gap,
@@ -469,10 +544,13 @@ def main(argv=None) -> int:
                         help="interactive: talk into the laptop mic, it talks back out loud")
     parser.add_argument("--webcam", action="store_true",
                         help="continuously narrate the laptop webcam out loud (Pi-camera stand-in)")
-    parser.add_argument("--mic", action="store_true",
-                        help="with --webcam: also listen each round (talk to it while it watches)")
+    parser.add_argument("--mic", action=argparse.BooleanOptionalAction, default=True,
+                        help="webcam/serve: capture mic audio (in-memory only) and react to "
+                             "what's heard — ON by default; use --no-mic to disable")
     parser.add_argument("--serve", action="store_true",
                         help="bind the Pi TCP socket + phone WS and run live")
+    parser.add_argument("--no-webcam", action="store_true",
+                        help="serve mode: Pi-ONLY — never use the laptop camera, only the Pi's frames")
     parser.add_argument("--play", action="store_true",
                         help="play narration out loud on this laptop (afplay)")
     parser.add_argument("--image", type=str, default=None,
@@ -496,7 +574,7 @@ def main(argv=None) -> int:
                           sensitivity=args.sensitivity)
     if args.serve:
         return run_serve(play=args.play, use_mic=args.mic, interval=args.interval,
-                         sensitivity=args.sensitivity)
+                         sensitivity=args.sensitivity, no_webcam=args.no_webcam)
     return run_mock(args.iterations, args.image, play=args.play)  # default = mock
 
 

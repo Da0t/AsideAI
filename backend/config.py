@@ -60,10 +60,12 @@ class Config:
         # change_threshold (0..1 mean pixel delta); quiet scenes still get a look
         # every quiet_checkin_sec so audio-only / slow moments aren't missed.
         self.watch_fps = float(os.environ.get("WATCH_FPS", "5"))
-        # 0.045 ≈ 2.4x a measured webcam noise floor (~0.019 peak): ignores sensor
-        # noise/auto-exposure, fires on real motion (a person scores ~0.05-0.17).
-        self.change_threshold = float(os.environ.get("CHANGE_THRESHOLD", "0.045"))
-        self.quiet_checkin_sec = float(os.environ.get("QUIET_CHECKIN_SEC", "12"))
+        # 0.03 sits just above a measured webcam noise floor (~0.019 peak) so it still
+        # ignores sensor noise/auto-exposure, but reacts to smaller movements (a hand,
+        # a lean, a shift) — not just someone walking fully into frame.
+        self.change_threshold = float(os.environ.get("CHANGE_THRESHOLD", "0.03"))
+        # How often a quiet, unchanged scene still gets a look (lower = chattier).
+        self.quiet_checkin_sec = float(os.environ.get("QUIET_CHECKIN_SEC", "8"))
 
     @property
     def has_anthropic(self) -> bool:

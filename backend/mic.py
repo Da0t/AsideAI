@@ -77,13 +77,19 @@ class RollingMic:
         self._buf = bytearray()
         self._lock = threading.Lock()
         self._stream = None
+        self._total_bytes = 0   # ever captured — proves the stream is actually feeding
+        self.dropouts = 0       # PortAudio over/underflows (audio glitches)
 
     def start(self) -> "RollingMic":
         import sounddevice as sd  # lazy: --mock never needs it
 
         def _cb(indata, frames, time_info, status):  # PortAudio thread
+            if status:
+                self.dropouts += 1
+            data = bytes(indata)
             with self._lock:
-                self._buf.extend(bytes(indata))
+                self._buf.extend(data)
+                self._total_bytes += len(data)
                 if len(self._buf) > self._maxbytes:
                     del self._buf[: len(self._buf) - self._maxbytes]
 
@@ -92,6 +98,8 @@ class RollingMic:
             device=pick_input_device(), callback=_cb,
         )
         self._stream.start()
+        log.info("rolling mic capturing — device=%s, %dHz mono (in-memory only, not saved)",
+                 device_name(), self.rate)
         return self
 
     def recent(self, seconds: float) -> bytes:
@@ -99,6 +107,15 @@ class RollingMic:
         n = int(self.rate * seconds) * 2
         with self._lock:
             return bytes(self._buf[-n:])
+
+    def seconds_buffered(self) -> float:
+        """Seconds of audio currently in the ring buffer (0 => not capturing)."""
+        with self._lock:
+            return len(self._buf) / (self.rate * 2)
+
+    def total_seconds(self) -> float:
+        """Total seconds of audio captured since start (confirms the stream fed)."""
+        return self._total_bytes / (self.rate * 2)
 
     def stop(self) -> None:
         if self._stream is not None:

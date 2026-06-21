@@ -33,6 +33,7 @@ class FrameWatcher:
         self._frame = None      # latest JPEG bytes seen by the watcher
         self._sig = None        # signature of the latest frame
         self._baseline = None   # signature of the last consumed (narrated) frame
+        self._wake = threading.Event()  # external "narrate now" nudge (Pi events)
 
     def start(self) -> "FrameWatcher":
         self._thread = threading.Thread(target=self._run, name="frame-watcher", daemon=True)
@@ -41,6 +42,11 @@ class FrameWatcher:
 
     def stop(self) -> None:
         self._stop.set()
+
+    def wake(self) -> None:
+        """Nudge wait_for_change to return immediately on the next poll — used by a
+        Pi 'narrate now' event (e.g. someone entered) to interrupt a quiet wait."""
+        self._wake.set()
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -67,6 +73,7 @@ class FrameWatcher:
         get a look). Returns (jpeg_or_None, reason):
 
           'first'   — nothing consumed yet; establish the scene
+          'event'   — a Pi 'narrate now' event nudged us (wake())
           'change'  — the view moved enough to be worth a look
           'timeout' — quiet, but the check-in window elapsed
           'blank'   — no usable view (dark/covered/placeholder)
@@ -77,7 +84,12 @@ class FrameWatcher:
             with self._lock:
                 jpeg, sig, base = self._frame, self._sig, self._baseline
             elapsed = time.monotonic() - start
-            if jpeg and not frame_source._is_blank_sig(sig):
+            have_view = bool(jpeg) and not frame_source._is_blank_sig(sig)
+            if self._wake.is_set():            # Pi event nudge — narrate this moment
+                self._wake.clear()
+                if have_view:
+                    return jpeg, "event"
+            if have_view:
                 if base is None:
                     return jpeg, "first"
                 if frame_source.change_score(base, sig) >= threshold:

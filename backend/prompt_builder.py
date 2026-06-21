@@ -24,7 +24,7 @@ def _media_type(frame: bytes) -> str:
 
 
 def build(personality: dict, frame, speech: str = "", history=None,
-          decide: bool = False) -> dict:
+          decide: bool = False, static: bool = False) -> dict:
     history = history or []
 
     has_frame = bool(frame)
@@ -63,17 +63,23 @@ def build(personality: dict, frame, speech: str = "", history=None,
             "lightly reword them, but you MAY call back to them or build a running "
             "gag for continuity): " + " | ".join(history[-8:]))
     if decide:
-        # Comedic timing: the funniest narrator waits for the moment, then lands it.
+        # Anti-hallucination guard: a frozen scene must never get phantom motion.
         lines.append(
-            "You are a COMEDIC narrator on a live feed, and great comedy is about "
-            "TIMING, not constant talking. Stay quiet through dull or unchanged "
-            "moments and wait for an opportune beat: someone enters, reacts, makes a "
-            "face, does something awkward or unexpected, a funny juxtaposition, or a "
-            "clear change. When a moment like that lands, deliver ONE genuinely funny, "
-            "sharp in-character line — a real punchline, not a safe generic observation. "
-            "Otherwise reply with exactly SKIP (one word, nothing else) — also SKIP if "
-            "the scene is basically the same as your recent lines."
-        )
+            "Narrate ONLY what is actually visible in this frame — never invent "
+            "motion, arrivals, or events that aren't shown.")
+        if static:
+            # Periodic check-in on an UNCHANGED scene — bias to silence.
+            lines.append(
+                "Nothing has changed since you last looked. Reply with exactly SKIP "
+                "(one word, nothing else) UNLESS you have a genuinely fresh, funny, "
+                "in-character take that doesn't repeat your recent lines.")
+        else:
+            # A real change just fired the gate — bias to speaking.
+            lines.append(
+                "Something just changed in view — lean toward speaking: deliver ONE "
+                "sharp, genuinely funny, in-character line about what's happening now. "
+                "Reply with exactly SKIP (one word) only if it's essentially identical "
+                "to your last line.")
 
     content.append({"type": "text", "text": "\n".join(lines)})
 
