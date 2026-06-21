@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Menu, Info, Bell, Plus } from 'lucide-react-native';
+import { Info, Bell, Plus } from 'lucide-react-native';
 import PersonalityCard from '../components/PersonalityCard';
 import ModeCard from '../components/ModeCard';
 import TabBar from '../components/TabBar';
@@ -12,6 +12,7 @@ import GoLiveButton from '../components/GoLiveButton';
 import SettingsSheet from '../components/SettingsSheet';
 import InfoSheet from '../components/InfoSheet';
 import IconButton from '../components/IconButton';
+import Logo from '../components/Logo';
 import { useTheme } from '../theme/ThemeContext';
 import { modes } from '../data/personalities';
 import { getTheme } from '../theme/personalities';
@@ -74,10 +75,11 @@ export default function HomeScreen() {
       <View style={{ paddingTop: insets.top }}>
         {/* Top nav bar */}
         <View style={styles.navBar}>
-          <IconButton variant="ghost" onPress={() => {}}>
-            <Menu size={24} color={colors.textPrimary} />
-          </IconButton>
-          <Text style={styles.navTitle}>Aside</Text>
+          <View style={styles.navSpacer} />
+          <View style={styles.brand}>
+            <Logo size={22} />
+            <Text style={styles.navTitle}>Aside</Text>
+          </View>
           <View style={styles.navRight}>
             <IconButton variant="ghost" onPress={() => setInfoOpen(true)}>
               <Info size={20} color={colors.textPrimary} />
@@ -216,6 +218,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
     height: 52,
   },
+  brand: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   navTitle: {
     fontFamily: fonts.display700,
     fontSize: textSize.lg,
@@ -226,6 +233,9 @@ const styles = StyleSheet.create({
   navRight: {
     flexDirection: 'row',
     gap: 4,
+  },
+  navSpacer: {
+    width: 92,
   },
   bellDot: {
     position: 'absolute',

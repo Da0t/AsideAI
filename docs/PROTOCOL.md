@@ -75,6 +75,7 @@ simple). Voice audio rides as base64 inside the `voice` message.
 | `line`    | `{ text, personality }`                   | the narration text just spoken (live captions) |
 | `voice`   | `{ audio (base64), mime, personality }`   | the narration audio to play (voice has priority — duck music) |
 | `cue`     | `{ name }`                                | fire a pre-loaded cue now (entrance/laugh/…); from an event or another client |
+| `frame`   | `{ data (base64 JPEG), mime }`            | live camera feed for the Vision screen — what the AI currently sees. Throttled to `PHONE_FRAME_FPS` (default 4/s), only sent while a phone is connected. Visualization only; off the narration path. |
 
 ### phone → laptop
 
