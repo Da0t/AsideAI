@@ -1,151 +1,153 @@
 # Architecture
 
 The Narrator is three code components — **firmware**, **backend**, **frontend** —
-plus six external services. The firmware perceives, the backend interprets, the
-frontend performs. This doc covers the full pipeline, how the components
-communicate, the live-loop vs. async split, the design rules, and the
+plus a couple of external services. The firmware perceives, the backend
+interprets, the frontend performs. This doc covers the full pipeline, how the
+components communicate, the live-loop vs. async split, the design rules, and the
 service → job mapping.
+
+> **Where things run:** the Pi (QNX, C++) captures and triggers; a **laptop**
+> (Python) runs the orchestrator and calls the cloud. **Claude Haiku 4.5 vision is
+> the eyes + brain** (frame → description + line in one call) — Overshoot is gone.
+> On-device event triggers use **TensorFlow Lite via QSF** — MediaPipe is gone (it
+> doesn't build on QNX). See Deployment Topology.
 
 ---
 
 ## Deployment Topology
 
-Three code components, but only **two physical tiers** plus the cloud services:
+Three code components, three physical tiers, plus the cloud services:
 
-| Tier                     | Runs                                   | Contains                                              |
-| ------------------------ | -------------------------------------- | ---------------------------------------------------- |
-| **Wearable (Raspberry Pi)** | the "body"                          | `firmware/` (camera + mic capture, LiveKit publish) **and** `backend/` (the on-device **orchestrator**) + Sentry |
-| **Cloud services**       | the "brain & senses" (sponsors)        | Overshoot, Deepgram STT, Deepgram TTS, Claude Haiku, Redis |
-| **Companion app (phone)**| control surface + speakers             | `frontend/`                                          |
+| Tier                       | Runs                          | Contains                                                  |
+| -------------------------- | ----------------------------- | -------------------------------------------------------- |
+| **Wearable (Raspberry Pi, QNX SDP 8.0)** | C++          | `firmware/` — QSF camera + mic capture, **TFLite** event triggers |
+| **Laptop (Linux/macOS)**   | Python                        | `backend/` — the **orchestrator**: Claude vision, Deepgram STT/TTS, Redis, Sentry |
+| **Companion app (phone)**  | React Native / Expo           | `frontend/` — control surface + speakers                 |
+| **Cloud services**         | —                             | Claude Haiku 4.5 (vision + narration), Deepgram STT + TTS |
 
-The important nuance: **`backend/` is the on-device orchestrator — it runs on the
-Pi, co-located with `firmware/`.** It is *not* a separate cloud server. The
-orchestrator routes sensor data out to the cloud services, collects the
-responses, decides what fires, and reads personality state from Redis. So:
+The split is **"QNX captures, laptop orchestrates."** The Pi does the hard
+real-time, QNX-specific work (capture + on-device ML in C++) and ships
+frames/audio/events to the laptop **over the LAN (Wi-Fi)**. The laptop runs the
+Python orchestrator and the cloud SDKs — which sidesteps running those SDKs on
+QNX. **Redis runs on the laptop** (local) or in the cloud. **Sentry monitors the
+laptop orchestrator** (not the device).
 
-- The `firmware/` → `backend/` audio hop is **local/in-process on the Pi**, not a
-  network call to a remote server.
-- **Sentry runs device-side**, monitoring the pipeline where it executes.
-- The only thing that crosses the network on the hot path is calls to the cloud
-  AI services and the voice/cue delivery to the phone.
+> **Why this split:** the QNX Pi has no GPU (so heavy ML is cloud, not local), and
+> the Python SDKs (Anthropic, Deepgram, Redis) are painful on QNX. Letting the
+> laptop be the orchestrator keeps QNX doing what it's good at — deterministic
+> capture + on-device TFLite — and keeps the cloud glue in easy Python.
 
-The split between `firmware/` and `backend/` is therefore a **code-organization**
-boundary (capture vs. orchestration), not a deployment boundary — both ship to the
-Pi together.
+### Why TFLite, not MediaPipe (on-device triggers)
+
+MediaPipe targets Linux / Android / iOS — **not QNX**; being C++ doesn't make it
+portable. **TensorFlow Lite via QSF (QNX Sensor Framework)** is the QNX-supported
+on-device ML path, proven by `qnx/projects/ai-camera-app` (QSF camera + TFLite on
+QNX SDP 8.0 / Pi 4). TFLite is only the *trigger*, not the eyes — cuttable; fall
+back to OpenCV motion detection or manual cues.
 
 ---
 
 ## The Pipeline (live loop)
 
 ```
-  ┌───────────── Raspberry Pi (the body) ──────────────┐
-  │ ┌─────────────┐                                    │
-  │ │  firmware/  │                                    │
-  │ │  camera ────┼──────────────▶ Overshoot (publish video via LiveKit)
-  │ │  mic ───────┼──────┐          (vision, <200ms)   │      │
-  │ └─────────────┘      │ (local)      │              │      │
-  │                      ▼              │ scene        │      │
-  │             ┌────────────────────────────────────┐ │      │
-  │             │   backend/  (on-device orchestrator)│ │      │
-  │             │                                    │ │      │
-  │             │  1. scene   ◀── Overshoot          │◀┼──────┘
-  │             │  2. speech  ◀── Deepgram STT (mic) │ │  (+ sentiment/intent)
-  │             │  3. active personality ◀── Redis   │ │
-  │             │            │                       │ │
-  │             │            ▼                       │ │
-  │             │  4. prompt_builder                 │ │
-  │             │     (system prompt + scene +       │ │
-  │             │      speech + recent history)      │ │
-  │             │            │                       │ │
-  │             │            ▼                       │ │
-  │             │  5. Claude Haiku → SHORT line      │ │
-  │             │     (+ decides voice / music cue)  │ │
-  │             │            │                       │ │
-  │             │            ▼                       │ │
-  │             │  6. Deepgram TTS → voice audio     │ │
-  │             │            │                       │ │
-  │             │  7. write line to Redis (callbacks)│ │
-  │             └────────────┬───────────────────────┘ │
-  │  Sentry monitors the pipeline, device-side. ───────┘
-  └───────────────┬─────────────────────────┬──────────┘
-                  │ voice audio              │ music-cue decision (fire / which)
-                  ▼                          ▼
-          ┌────────────────────────────────────────┐
-          │              frontend/  (phone)          │
-          │  AudioManager: duck/cut music, play      │
-          │  voice (priority, NO stacking), restore  │
-          │  manual cues: entrance theme, laugh track│
-          └────────────────────────────────────────┘
+  ┌──── Raspberry Pi (QNX, C++) ────┐                ┌──── Laptop (Python orchestrator) ────┐
+  │  camera ─QSF→ frame ────────────┼──── LAN ──────▶│  1. frame  (→ Claude vision)          │
+  │  mic ───────→ audio ────────────┼──── LAN ──────▶│  2. speech ◀── Deepgram STT (mic)     │
+  │  TFLite event detection ────────┼──── LAN ──────▶│     event: "narrate now" + cue        │
+  │  (entrance / wave / fall)       │                │  3. active personality ◀── Redis      │
+  └─────────────────────────────────┘                │            │                          │
+                                                      │            ▼                          │
+                                                      │  4. prompt_builder                    │
+                                                      │     (system prompt + frame[image]     │
+                                                      │      + speech + recent history)       │
+                                                      │            │                          │
+                                                      │            ▼                          │
+                                                      │  5. Claude Haiku (vision)             │
+                                                      │     image + prompt → SHORT line       │
+                                                      │     (EYES + BRAIN in one call)        │
+                                                      │            │                          │
+                                                      │            ▼                          │
+                                                      │  6. Deepgram TTS → voice audio        │
+                                                      │  7. write line to Redis (callbacks)   │
+                                                      │  Sentry monitors all of this.         │
+                                                      └────────────┬──────────────────────────┘
+                                                  voice audio + cue │ signals
+                                                                   ▼
+                                                          ┌────────────────────────────────┐
+                                                          │         frontend/  (phone)       │
+                                                          │  AudioManager: duck/cut music,   │
+                                                          │  play voice (priority, NO        │
+                                                          │  stacking), restore              │
+                                                          │  manual cues + TFLite-fired cues │
+                                                          └────────────────────────────────┘
 ```
 
 ### Step by step
 
-1. **Capture (firmware).** Camera frames + mic audio. Camera video is published
-   to an Overshoot stream over LiveKit; mic audio is handed to the on-device
-   orchestrator (a **local** hop — `backend/` runs on the same Pi).
-2. **See (Overshoot).** The orchestrator asks Overshoot for a scene description of
-   the latest frame (or last few seconds) of the live video — targets **<200ms**.
-3. **Hear (Deepgram STT).** Mic audio is transcribed to text — what people in the
-   room are saying — optionally enriched with **sentiment / intent** from
-   Deepgram's audio intelligence.
-4. **Recall state (Redis).** The orchestrator reads the active personality and
-   mode, plus recent narration history (for callbacks).
-5. **Build the prompt (`prompt_builder`).** Combine the personality's system
-   prompt + the scene description + recent speech + a little history.
-6. **Narrate (Claude Haiku).** One short, in-character line — low `max_tokens`.
-   The brain **also decides the voice and whether to fire a music cue** (e.g. an
-   entrance theme), which is signaled to the app alongside the line.
+1. **Capture (firmware, Pi).** Camera frames via QSF + mic audio. TFLite runs on
+   every frame locally; frames, audio, and events go to the laptop **over the LAN**.
+2. **Detect events (TFLite, on-device).** Person enters / waves / falls → signal
+   the laptop to **narrate now** and to **auto-fire a cue** (e.g. the entrance
+   theme). No cloud round-trip — this is why it feels instant.
+3. **See + narrate (Claude Haiku, vision).** The laptop sends the **frame as an
+   image** plus the personality prompt to Claude Haiku 4.5, which **describes the
+   scene and writes the in-character line in one call** — eyes + brain merged.
+   Low `max_tokens`.
+4. **Hear (Deepgram STT).** Mic audio → text (optionally with sentiment / intent).
+5. **Recall state (Redis).** Active personality + mode + recent history (callbacks).
+6. **Build the prompt (`prompt_builder`).** Personality system prompt + frame +
+   speech + a little history.
 7. **Voice it (Deepgram TTS).** The line becomes audio in the personality's voice.
-8. **Perform (frontend).** The app plays the voice, ducking/cutting any background
-   music so narration is always intelligible. **Voice has priority — no stacking.**
-   Cue buttons can fire pre-loaded SFX on demand.
-9. **Remember (Redis).** The line is appended to narration history so future
-   lines can call back to earlier ones.
+8. **Perform (frontend).** The app plays the voice, ducking/cutting music. **Voice
+   has priority — no stacking.** Manual + TFLite-fired cues play pre-loaded SFX
+   instantly.
+9. **Remember (Redis).** The line is appended to history for callbacks.
 
-> **Latency budget: ~1–2 seconds end to end.** Every step in the live loop is on
-> the critical path. Keep payloads small and `max_tokens` low (see Design Rules).
+> **Latency budget: ~1–2 seconds end to end.** The Pi→laptop LAN hop is ~10–30ms;
+> the cloud calls (Claude + Deepgram) dominate. Keep the frame small and
+> `max_tokens` low.
 
-> **Cinematic entrance (the payoff):** a door is seen → the entrance theme fires
-> **instantly** from the app (pre-loaded) → narration arrives ~1–2s later, spoken
-> over the now-ducked theme. The lag becomes a dramatic beat instead of a flaw —
-> and it's free, because the music was never on the critical path.
+> **Cinematic entrance (the payoff):** TFLite sees a person enter → the entrance
+> theme fires **instantly** (on-device trigger → phone) → narration arrives ~1–2s
+> later over the now-ducked theme. The lag becomes a dramatic beat.
 
 ---
 
 ## How the Components Communicate
 
-`backend/` here is the **on-device orchestrator** running on the Pi (see
-Deployment Topology). The `firmware ↔ backend` hop is local; everything else on
-the hot path is a cloud call or delivery to the phone.
+The `firmware ↔ backend` hop is now a **LAN/TCP** connection (the backend is on a
+laptop, not the Pi). The cloud calls and the phone delivery are the other hops.
 
 | From → To              | Transport                          | Payload                                   |
 | ---------------------- | ---------------------------------- | ----------------------------------------- |
-| firmware → Overshoot   | **LiveKit** (publish to room)      | Camera video frames                       |
-| firmware → backend     | **local** (on-Pi, in-process / loopback) | Mic audio chunks                    |
-| firmware ↔ Overshoot   | keepalive ping                     | Keeps the stream from dying (~5 min TTL)  |
-| backend → Overshoot    | **HTTP** (OpenAI-compatible chat)  | "Describe this scene" + `ovs://` video ref |
+| firmware → backend     | **LAN / TCP** (Wi-Fi)              | Latest camera frame (JPEG, downscaled)    |
+| firmware → backend     | **LAN / TCP** (Wi-Fi)              | Mic audio chunks                          |
+| firmware → backend     | **LAN / TCP** (Wi-Fi)              | TFLite event signals ("narrate now", "entrance") |
+| backend → Claude       | Anthropic SDK / HTTP               | Personality prompt **+ frame image** → short line |
 | backend → Deepgram STT | Deepgram SDK / WS                  | Mic audio → transcript (+ sentiment/intent) |
-| backend → Claude       | Anthropic SDK / HTTP               | Personality prompt → short line + cue decision |
 | backend → Deepgram TTS | Deepgram SDK / HTTP                | Line text → voice audio                   |
-| backend ↔ Redis        | Redis protocol                     | Active personality/mode, narration history |
-| backend → frontend     | WebSocket (push)                   | Voice audio **and** the music-cue decision (fire / which) |
-| frontend → backend     | WebSocket / HTTP                   | Switch personality/mode, manual cue, custom personality |
-| backend → Sentry       | Sentry SDK (device-side)           | Errors + performance traces               |
+| backend ↔ Redis        | Redis protocol (laptop-local/cloud)| Active personality/mode, narration history |
+| backend → frontend     | WebSocket (push, over LAN)         | Voice audio **and** cue signals (fire / which) |
+| frontend → backend     | WebSocket / HTTP (over LAN)        | Switch personality/mode, manual cue, custom personality |
+| backend → Sentry       | Sentry SDK (on the laptop)         | Errors + performance traces               |
 
-### Overshoot specifics
+### Pi ↔ laptop protocol
 
-Overshoot is an **OpenAI-compatible chat completions** API. You reference the
-live video inside a chat message using an `ovs://` URI:
+A framed **TCP** connection from the Pi to a port the laptop backend listens on
+(`FIRMWARE_LISTEN`, e.g. `0.0.0.0:8765`). Three message kinds, length-prefixed:
 
-- `ovs://streams/{stream_id}?frame_index=-1` — the **latest** frame.
-- `ovs://streams/{stream_id}?start_offset_ms=-5000` — the **last 5 seconds**.
+- `frame` — JPEG bytes (downscaled, to control Claude image-token cost/latency)
+- `audio` — a PCM chunk for Deepgram STT
+- `event` — `{kind, narrate_now, cue}` from the on-device TFLite detector
 
-**Getting video in:**
+It's a moving wearable on Wi-Fi: **design for dropped frames** (skip/reuse — only
+one frame per narration cycle is needed) and **reconnect on drop**.
 
-1. Create a stream → Overshoot returns a **LiveKit room URL + token**.
-2. The firmware publishes camera video to that room via the **LiveKit SDK**.
-3. The stream stays alive only ~5 minutes after the last **keepalive** — the
-   firmware must ping to keep it open.
+### Claude vision specifics
+
+Claude Haiku 4.5 accepts **image input** (base64 JPEG/PNG, or a URL) alongside text
+in a user message. One request carries the frame + the personality system prompt
+and returns the in-character line — no separate scene-description service.
 
 ---
 
@@ -156,11 +158,11 @@ Two clocks run in this system. Keep them separate.
 ### Live loop (hot path — must be fast)
 
 ```
-camera/mic → Overshoot/STT → Claude Haiku → Deepgram TTS → frontend audio
+Pi: frame + audio + TFLite triggers ─LAN→ laptop: Claude Haiku (vision) → Deepgram TTS → phone audio
 ```
 
-Everything above runs on the **~1–2s** budget. Nothing slow, nothing generated
-on demand that could be pre-loaded, nothing optional.
+Everything above runs on the **~1–2s** budget. Nothing slow, nothing generated on
+demand that could be pre-loaded, nothing optional.
 
 ### Async (cold path — off the hot loop)
 
@@ -168,12 +170,9 @@ on demand that could be pre-loaded, nothing optional.
 narration history (Redis) → Midjourney → illustrated "journal"
 ```
 
-The **journal** turns the day's narration into illustrated panels via Midjourney —
-snapshots captured during the session become **per-personality styled
-illustrations** (the goth mommy's journal looks nothing like the hype man's). It
-reads from Redis history *after the fact*, renders in the background, and never
-blocks narration. It is built **last** and is fully **cuttable** — the bonus
-encore and shareable artifact, not a dependency.
+The **journal** turns the session's narration into per-personality illustrated
+panels via Midjourney. It reads Redis history *after the fact*, renders in the
+background, and never blocks narration. Built **last** and fully **cuttable**.
 
 > **The rule:** if it has to happen before the next line is spoken, it's live. If
 > it can happen seconds or minutes later, it's async. When in doubt, push it async.
@@ -182,26 +181,29 @@ encore and shareable artifact, not a dependency.
 
 ## Design Rules
 
-These are non-negotiable constraints that shape every component.
-
-1. **The live loop must stay fast (~1–2s).** Narration stays **SHORT** — set a
-   low `max_tokens` on Claude Haiku. A great one-liner beats a slow paragraph.
+1. **The live loop must stay fast (~1–2s).** Narration stays **SHORT** — low
+   `max_tokens` on Claude Haiku.
 
 2. **Music/SFX are pre-loaded and fire instantly from the frontend.** Never
-   generate audio cues live. They ship as files in `assets/sounds/` and play with
-   zero latency.
+   generate audio cues live. They ship as files in `assets/sounds/`.
 
 3. **Each personality is a bundle:**
    `{name, Claude system prompt, Deepgram voice, sound-cue set}`.
    **Only the active personality's sounds fire** — the hype man's air horn does
    not play while the goth mommy is narrating.
 
-4. **Custom personalities are first-class.** A user can create one by picking a
-   Deepgram voice and describing a character. It produces the same bundle shape.
+4. **Custom personalities are first-class.** Pick a Deepgram voice + describe a
+   character → the same bundle shape.
 
-5. **Everything is free.** No payment, no paid tiers, no gated features.
+5. **Everything is free.** No payment, no paid tiers. (Claude + Deepgram are the
+   only paid APIs and were already in the plan; QNX, QSF, and TFLite are free.)
 
 6. **The journal (Midjourney) is async, off the live loop, and built last.**
+
+7. **TFLite is the trigger, not the eyes.** Claude vision does the seeing;
+   on-device TFLite only decides *when* to narrate and *which* cue to auto-fire.
+   On-device, on the Pi, and **cuttable** — fall back to OpenCV motion detection or
+   manual cues without touching narration.
 
 See [PERSONALITIES.md](PERSONALITIES.md) for the bundle structure and
 [BUILD_ORDER.md](BUILD_ORDER.md) for sequencing and what's cuttable.
@@ -210,26 +212,28 @@ See [PERSONALITIES.md](PERSONALITIES.md) for the bundle structure and
 
 ## Service → Job Mapping
 
-| Service          | Job                | Driven by                          |
-| ---------------- | ------------------ | ---------------------------------- |
-| **Overshoot**    | Vision / eyes      | on-Pi orchestrator ← firmware video |
-| **Deepgram**     | STT + TTS (ears + voice) | on-Pi orchestrator           |
-| **Claude Haiku** | Narration / brain  | on-Pi orchestrator                 |
-| **Redis**        | Memory + state     | orchestrator (read) + app (write state) |
-| **Sentry**       | Reliability        | device-side (on the Pi)            |
-| **Midjourney**   | Journal (async)    | app, off the critical path         |
+| Service / piece    | Job                          | Where it runs                       |
+| ------------------ | ---------------------------- | ----------------------------------- |
+| **Claude Haiku**   | Vision **+** narration (eyes + brain) | cloud — called by the laptop |
+| **Deepgram**       | STT + TTS (ears + voice)     | cloud — called by the laptop        |
+| **TFLite / QSF**   | On-device event triggers     | **the Pi** (QNX, C++) — local, no round-trip |
+| **Redis**          | Memory + state               | the laptop (local) or cloud         |
+| **Sentry**         | Reliability                  | the laptop (the orchestrator host)  |
+| **Midjourney**     | Journal (async)              | off the critical path               |
 
-> The AI services and Redis are the **cloud tier**; the orchestrator (`backend/`)
-> on the Pi drives them. Sentry watches the pipeline where it runs, on the device.
+> **Overshoot has been removed** — Claude vision replaced it and folded the "eyes"
+> into the same call as the "brain". **MediaPipe has been removed** — TFLite via
+> QSF is the QNX-native on-device trigger path.
 
 ---
 
 ## Component Responsibilities (one line each)
 
-- **`firmware/`** (on the Pi) — perceive and publish: camera → Overshoot
-  (LiveKit), mic → orchestrator (local), keep the stream alive.
-- **`backend/`** (on the Pi — the orchestrator) — interpret and route: gather
-  scene + speech + state, build the prompt, call Claude (line + cue decision),
-  voice it with Deepgram, manage Redis, report to Sentry device-side.
+- **`firmware/`** (Raspberry Pi, QNX, C++) — perceive and trigger: QSF camera + mic
+  capture, TFLite event detection, ship frames/audio/events to the laptop over the
+  LAN.
+- **`backend/`** (laptop, Python — the orchestrator) — interpret and route: receive
+  the frame + speech + events, build the prompt, call Claude (vision → line), voice
+  it with Deepgram, manage Redis, report to Sentry.
 - **`frontend/`** (phone) — perform & control: switch personality/mode, build
-  custom personalities, play voice while ducking music, fire manual cues.
+  custom personalities, play voice while ducking music, fire manual + auto cues.

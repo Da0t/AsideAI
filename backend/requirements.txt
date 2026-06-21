@@ -1,20 +1,22 @@
-# backend/ dependencies (Python)
-# Pin versions during build. Scaffold lists intent only.
+# backend/ dependencies (Python) — runs on the LAPTOP orchestrator.
+#
+# The CORE backend is STDLIB-ONLY: config, the wire protocol, the live loop, the
+# Pi TCP server, and the Claude/Deepgram REST calls (via urllib) all work with no
+# installs. `python -m backend.main --mock` runs with nothing installed and no keys.
+#
+# Install these for the live/full experience:
+websockets         # phone channel (laptop <-> phone WebSocket). Without it the
+#                    phone channel is disabled but the loop still runs.
+certifi            # CA bundle for the HTTPS calls (fixes macOS-Python's empty
+#                    trust store -> CERTIFICATE_VERIFY_FAILED). Used if present.
+sounddevice        # laptop mic capture for `--talk` (bundles PortAudio on macOS;
+#                    auto-selects a Blue Yeti / Snowball if plugged in)
 
-# --- Services ---
-anthropic          # Claude Haiku (narration / brain)
-deepgram-sdk       # STT (ears) + TTS (voice)
-openai             # Overshoot is OpenAI-compatible chat completions
-redis              # memory + state (active personality/mode, history)
-sentry-sdk         # reliability (errors + performance)
-
-# --- Server / live loop ---
-fastapi            # HTTP + WebSocket to firmware (audio in) and frontend (audio out)
-uvicorn            # ASGI server
-websockets         # streaming audio in/out
-
-# --- Config ---
-python-dotenv      # load .env
-
-# --- Journal (async, build last) ---
-# midjourney client TBD  # off the hot path; see journal/midjourney.py
+# Optional conveniences (each degrades gracefully if absent):
+# opencv-python    # required for `--webcam` (live laptop-camera narration, a
+#                    Pi-camera stand-in); also enables the webcam fallback in --serve
+# redis            # shared state across backend + frontend (else in-memory)
+# sentry-sdk       # reliability monitoring (else no-op)
+# python-dotenv    # .env loading (else a tiny built-in parser is used)
+#
+# Cloud calls use stdlib urllib — the anthropic / deepgram SDKs are NOT required.

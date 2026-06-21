@@ -1,33 +1,71 @@
-"""Prompt builder — assemble the Claude Haiku prompt.
+"""Prompt builder — assemble the Claude Haiku (vision) request.
 
-Combines the active personality's system prompt with the live context (scene +
-speech) and a little narration history (for callbacks). This is the seam where a
-personality's character meets the current moment.
+Combines the active personality's system prompt with the live context: the camera
+FRAME (as a base64 image block), recent speech, and a little narration history for
+callbacks. Claude sees the frame and writes the line in one call.
 
-Design rule: keep the OUTPUT short. The system prompt should demand brevity, and
-main.py sets a low max_tokens. This builder just assembles inputs.
-
-TODO: implement. This is a scaffold stub.
+Returns a dict main.py hands to claude.narrate():
+    {
+      "system":   personality system prompt (str),
+      "messages": [{"role":"user","content":[<image>, <text>]}],
+      "personality_name": str,   # for logging / mock output
+      "personality_slug": str,
+      "mock_hint": str | None,   # speech, used to flavor the offline mock line
+    }
 """
 
+import base64
 
-def build(personality, scene: str, speech: str, history=None) -> dict:
-    """Build the Claude messages/prompt for one narration line.
 
-    Args:
-        personality: the active bundle ({name, claude_system_prompt, voice, cues}).
-        scene: Overshoot's description of what's happening now.
-        speech: recent transcript from Deepgram STT (may be empty).
-        history: recent narration lines, for callbacks (may be None).
+def _media_type(frame: bytes) -> str:
+    if frame[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    return "image/jpeg"
 
-    Returns:
-        Something main.py can hand to claude.narrate() — e.g.
-        { "system": personality.claude_system_prompt,
-          "messages": [ ... scene + speech + history ... ] }
 
-    TODO:
-      - system = personality.claude_system_prompt
-      - user content: scene description + (speech if any) + (history for callbacks)
-      - keep it tight; remind the model to stay in character and SHORT
-    """
-    raise NotImplementedError("TODO: build personality prompt")
+def build(personality: dict, frame, speech: str = "", history=None) -> dict:
+    history = history or []
+
+    has_frame = bool(frame)
+    has_speech = bool(speech)
+
+    content = []
+    if has_frame:  # vision: include the camera frame as an image block
+        b64 = base64.standard_b64encode(frame).decode("ascii")
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": _media_type(frame), "data": b64},
+        })
+
+    # Bodycam model: the image is the wearer's first-person view; the speech is
+    # AMBIENT audio overheard in the scene. NARRATE the moment as an outside
+    # observer (third person) — never address the wearer or anyone in frame.
+    if has_frame and has_speech:
+        instr = ("This is your bodycam view, and this is what can be heard right now. "
+                 "Narrate this moment — what's happening in front of you and what's being "
+                 "said — in character, as an outside observer. ONE short sentence. "
+                 "No preamble; do NOT address anyone or say 'you'.")
+    elif has_frame:
+        instr = ("This is your bodycam view. Narrate what's happening in front of you, in "
+                 "character, as an outside observer. ONE short sentence. "
+                 "No preamble; do NOT address anyone or say 'you'.")
+    else:
+        instr = ("Narrate this moment from what can be heard, in character, as an outside "
+                 "observer. ONE short sentence. No preamble; do NOT address anyone.")
+
+    lines = [instr]
+    if has_speech:
+        lines.append(f'Overheard in the scene: "{speech}"')
+    if history:
+        lines.append("Your recent lines (vary from these; you may call back): "
+                     + " | ".join(history[-3:]))
+
+    content.append({"type": "text", "text": "\n".join(lines)})
+
+    return {
+        "system": personality.get("claude_system_prompt", ""),
+        "messages": [{"role": "user", "content": content}],
+        "personality_name": personality.get("name", "Narrator"),
+        "personality_slug": personality.get("slug", ""),
+        "mock_hint": speech or None,
+    }
