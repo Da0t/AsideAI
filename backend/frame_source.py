@@ -31,6 +31,53 @@ def load_image(path: str) -> bytes:
         return f.read()
 
 
+def signature(jpeg: bytes):
+    """A cheap 32x32 grayscale fingerprint of a frame (a flat pixel list), used for
+    blank-detection and frame-to-frame change scoring without a model call. Returns
+    None if the bytes can't be decoded (PIL missing or a bad frame)."""
+    if not jpeg:
+        return None
+    try:
+        import io
+        from PIL import Image
+        im = Image.open(io.BytesIO(jpeg)).convert("L").resize((32, 32))
+        return list(im.getdata())
+    except Exception:  # noqa: BLE001 — undecodable: caller decides what to do
+        return None
+
+
+def _is_blank_sig(sig) -> bool:
+    """True if a signature is effectively black or uniform. None (undecodable) is
+    treated as not-blank, matching is_blank's don't-block-on-failure behavior."""
+    if not sig:
+        return False
+    mean = sum(sig) / len(sig)
+    var = sum((p - mean) ** 2 for p in sig) / len(sig)
+    return mean < 12 or var < 25  # near-black or near-uniform (very conservative)
+
+
+def is_blank(jpeg: bytes) -> bool:
+    """True if the frame is effectively black or uniform (camera not really
+    feeding — covered, warming up, or the placeholder). Used to avoid narrating
+    nothing, which makes the model hallucinate.
+    """
+    if not jpeg:
+        return True
+    return _is_blank_sig(signature(jpeg))
+
+
+def change_score(sig_a, sig_b) -> float:
+    """How much two signatures differ, 0.0 (identical) .. 1.0, as the mean absolute
+    per-pixel delta over 255. A missing/mismatched signature scores 1.0 (treat the
+    unknown as fully changed, so we look rather than assume nothing happened)."""
+    if not sig_a or not sig_b or len(sig_a) != len(sig_b):
+        return 1.0
+    total = 0
+    for a, b in zip(sig_a, sig_b):
+        total += a - b if a > b else b - a
+    return total / (len(sig_a) * 255.0)
+
+
 def webcam_frame():
     """Capture one JPEG from the laptop webcam, or None if OpenCV is unavailable.
 

@@ -53,7 +53,17 @@ class Config:
         self.claude_max_tokens = int(os.environ.get("CLAUDE_MAX_TOKENS", "80"))
         self.frame_max_dim = int(os.environ.get("FRAME_MAX_DIM", "768"))
         self.loop_interval_sec = float(os.environ.get("LOOP_INTERVAL_SEC", "2.0"))
-        self.history_len = int(os.environ.get("HISTORY_LEN", "6"))
+        self.history_len = int(os.environ.get("HISTORY_LEN", "12"))  # agent memory window
+
+        # Change-gated perception (two-tier loop): a cheap local watcher samples at
+        # watch_fps and only wakes the Claude vision call when the view moves by
+        # change_threshold (0..1 mean pixel delta); quiet scenes still get a look
+        # every quiet_checkin_sec so audio-only / slow moments aren't missed.
+        self.watch_fps = float(os.environ.get("WATCH_FPS", "5"))
+        # 0.045 ≈ 2.4x a measured webcam noise floor (~0.019 peak): ignores sensor
+        # noise/auto-exposure, fires on real motion (a person scores ~0.05-0.17).
+        self.change_threshold = float(os.environ.get("CHANGE_THRESHOLD", "0.045"))
+        self.quiet_checkin_sec = float(os.environ.get("QUIET_CHECKIN_SEC", "12"))
 
     @property
     def has_anthropic(self) -> bool:

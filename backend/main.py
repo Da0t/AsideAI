@@ -22,9 +22,29 @@ import time
 
 from .config import config
 from . import protocol, prompt_builder, personalities, frame_source, audio_out, mic
+from .watcher import FrameWatcher
 from .clients import claude, deepgram_tts, deepgram_stt, redis_client, sentry_client
 
 log = logging.getLogger("narrator")
+
+
+def _is_skip(line: str) -> bool:
+    """True if the model chose to stay silent this round (returned SKIP).
+
+    Conservative: only an empty reply or a 1–2 word reply led by SKIP counts, so a
+    real line like "Skipping rope, the kid..." is NOT mistaken for a skip.
+    """
+    s = (line or "").strip()
+    if not s:
+        return True
+    tokens = s.upper().strip('".!()').split()
+    return len(tokens) <= 2 and bool(tokens) and tokens[0] == "SKIP"
+
+
+def _estimate_speech_seconds(line: str) -> float:
+    """Rough spoken duration of a line — used to avoid talking over it when the
+    phone (not the laptop) is the speaker."""
+    return max(2.0, len(line.split()) * 0.38)
 
 
 # ── Phone channel (laptop -> phone). Real impl is WebSocket; Noop when absent ──
@@ -92,26 +112,41 @@ class Hub:
 
     # --- one narration cycle (timed) ---
 
-    def narrate_once(self, frame: bytes, bundle: dict = None) -> dict:
+    def narrate_once(self, frame: bytes, bundle: dict = None, decide: bool = False) -> dict:
+        """Look at the frame and (optionally) decide whether to speak.
+
+        With decide=True the model may return SKIP — in which case nothing is
+        voiced or broadcast (the narrator just keeps observing). Returns a dict
+        with `spoke` (bool) and, when spoken, the line.
+        """
         t0 = time.monotonic()
         bundle = bundle or self.active_bundle()
         speech = deepgram_stt.latest_transcript()
         history = redis_client.recent_lines()
-        prompt = prompt_builder.build(bundle, frame, speech, history)
+        # Always speak the first line (establish the scene); only become selective
+        # once there are recent lines that a new one might just repeat.
+        decide = decide and bool(history)
+        prompt = prompt_builder.build(bundle, frame, speech, history, decide=decide)
         t1 = time.monotonic()
-        line = claude.narrate(prompt)               # EYES + BRAIN
+        line = claude.narrate(prompt)               # EYES + BRAIN (or "SKIP")
         t2 = time.monotonic()
-        audio = deepgram_tts.speak(line, bundle.get("deepgram_voice", ""))  # VOICE
-        t3 = time.monotonic()
 
-        if self.play_audio:
-            audio_out.play(audio)  # blocks until the line finishes speaking
-        redis_client.append_line(line)
-        self.phone.broadcast({"type": "line", "text": line, "personality": bundle.get("slug")})
-        self.phone.broadcast_voice(audio, {"format": "audio", "personality": bundle.get("slug")})
+        spoke = not (decide and _is_skip(line))
+        audio = b""
+        if spoke:
+            audio = deepgram_tts.speak(line, bundle.get("deepgram_voice", ""))  # VOICE
+            t3 = time.monotonic()
+            if self.play_audio:
+                audio_out.play(audio)  # blocks until the line finishes speaking
+            redis_client.append_line(line)
+            self.phone.broadcast({"type": "line", "text": line, "personality": bundle.get("slug")})
+            self.phone.broadcast_voice(audio, {"personality": bundle.get("slug")})
+        else:
+            t3 = t2
 
         return {
-            "line": line,
+            "spoke": spoke,
+            "line": line if spoke else None,
             "personality": bundle.get("slug", ""),
             "audio_bytes": len(audio),
             "ms": {
@@ -221,8 +256,73 @@ def run_talk(personality_slug: str = None, image_path: str = None,
     return 0
 
 
+def _start_rolling_mic(use_mic: bool):
+    """A background rolling-mic capture, or None. Listening this way never blocks the
+    visual change-detector (unlike record(), which stalls the loop for its window)."""
+    if not use_mic:
+        return None
+    if not mic.available():
+        log.info("mic requested but unavailable (pip install sounddevice) — vision only")
+        return None
+    try:
+        return mic.RollingMic().start()
+    except Exception as e:  # noqa: BLE001 — no mic shouldn't take the loop down
+        log.info("mic capture failed to start (%s) — vision only", e)
+        return None
+
+
+def _resolve_threshold(sensitivity):
+    """CLI --sensitivity overrides the configured change threshold (clamped 0..1)."""
+    if sensitivity is None:
+        return config.change_threshold
+    return max(0.0, min(1.0, sensitivity))
+
+
+def _live_loop(hub: "Hub", watcher: FrameWatcher, *, bundle: dict = None,
+               rolling=None, observe_gap: float, change_threshold: float,
+               quiet_checkin: float, label: str = "live") -> None:
+    """The two-tier narration loop shared by --serve and --webcam.
+
+    Blocks on the cheap change-detector and only wakes Claude on a real change (or a
+    periodic check-in). The watcher keeps sampling in its own thread, so we keep
+    watching while we speak and have the current situation ready the instant a line
+    ends. Raises KeyboardInterrupt up to the caller, which owns cleanup.
+    """
+    no_view = False
+    while True:
+        if not hub.running:               # phone paused narration
+            time.sleep(0.15)
+            continue
+        frame, reason = watcher.wait_for_change(change_threshold, quiet_checkin)
+        if reason == "stop":
+            break
+        if reason == "blank" or not frame or frame_source.is_blank(frame):
+            if not no_view:
+                log.info("[%s] no usable view (camera dark/blank) — waiting for a real frame", label)
+                no_view = True
+            time.sleep(0.4)
+            continue
+        if no_view:
+            log.info("[%s] view restored", label)
+            no_view = False
+        hub.take_event()                  # (events also auto-fire cues on arrival)
+        if rolling is not None:           # refresh the transcript from bg-captured audio
+            deepgram_stt.transcribe(rolling.recent(4.0))
+        res = hub.narrate_once(frame, bundle=bundle, decide=True)
+        watcher.mark_consumed()           # measure further change from what we just saw
+        if res["spoke"]:
+            log.info("%s → %s (%.0fms · %s)", res["personality"], res["line"],
+                     res["ms"]["total"], reason)
+            # Don't start the next line until this one has been spoken.
+            wait = observe_gap if hub.play_audio else (
+                _estimate_speech_seconds(res["line"]) + observe_gap)
+            time.sleep(wait)
+        # On SKIP: no sleep — wait_for_change already blocks until the next change.
+
+
 def run_webcam(personality_slug: str = None, interval: float = None,
-               play: bool = True, use_mic: bool = False) -> int:
+               play: bool = True, use_mic: bool = False,
+               sensitivity: float = None) -> int:
     """Continuously narrate what the LAPTOP WEBCAM sees, out loud.
 
     A stand-in for the Pi camera until it's wired — watch it narrate live. With
@@ -242,18 +342,15 @@ def run_webcam(personality_slug: str = None, interval: float = None,
         return 1
     if not (config.has_anthropic and config.has_deepgram):
         print("[webcam] heads-up: ANTHROPIC/DEEPGRAM keys missing — narration will be mock/silent.")
-    if use_mic and not mic.available():
-        print("[webcam] mic requested but unavailable (`pip install sounddevice`) — webcam only.")
-        use_mic = False
 
     hub = Hub()
     hub.play_audio = play
     bundle = hub.bundles.get(personality_slug) if personality_slug else None
-    interval = config.loop_interval_sec if interval is None else interval
-
     active = (bundle or hub.active_bundle()).get("slug")
+
     # Confirm we can actually read frames (camera permission / device index) so a
-    # denied camera fails loudly instead of spinning silently.
+    # denied camera fails loudly instead of spinning silently. Probe BEFORE the
+    # watcher starts, so the watcher thread is the only one touching the camera.
     probe = None
     for _ in range(20):
         probe = cam.read()
@@ -267,28 +364,25 @@ def run_webcam(personality_slug: str = None, interval: float = None,
         cam.close()
         return 1
 
-    mic_note = f" · 🎤 mic ON ({mic.device_name()}) — talk while it watches" if use_mic else ""
-    print(f"[webcam] narrating live · personality={active} · every ~{interval:.1f}s{mic_note} · Ctrl-C to quit\n")
+    rolling = _start_rolling_mic(use_mic)
+    change_threshold = _resolve_threshold(sensitivity)
+    observe_gap = 0.4 if interval is None else interval
+    watcher = FrameWatcher(cam.read, fps=config.watch_fps).start()
+
+    mic_note = f" · 🎤 mic ON ({mic.device_name()})" if rolling is not None else ""
+    print(f"[webcam] narrating live · personality={active} · change-gated "
+          f"(sensitivity={change_threshold:.3f}, {config.watch_fps:.0f}fps, "
+          f"check-in {config.quiet_checkin_sec:.0f}s){mic_note} · Ctrl-C to quit\n")
     try:
-        while True:
-            if use_mic:
-                print(f"  🎤 listening {interval:.0f}s…", flush=True)
-                heard = deepgram_stt.transcribe(mic.record(interval))  # blocks ~interval
-                if heard:
-                    print(f'  you: "{heard}"')
-            frame = cam.read()
-            if not frame:
-                time.sleep(0.1)
-                continue
-            b = bundle or hub.active_bundle()
-            print("  🔊 speaking…", flush=True)
-            res = hub.narrate_once(frame, bundle=b)   # plays out loud (afplay blocks)
-            print(f"  {res['personality']}: {res['line']}  ({res['ms']['total']:.0f}ms)")
-            if not use_mic:
-                time.sleep(interval)
+        _live_loop(hub, watcher, bundle=bundle, rolling=rolling,
+                   observe_gap=observe_gap, change_threshold=change_threshold,
+                   quiet_checkin=config.quiet_checkin_sec, label="webcam")
     except KeyboardInterrupt:
         print("\n[webcam] bye.")
     finally:
+        watcher.stop()
+        if rolling is not None:
+            rolling.stop()
         try:
             cam.close()
         except Exception:  # noqa: BLE001 — don't dump a traceback on Ctrl-C during shutdown
@@ -307,15 +401,18 @@ def _start_phone(hub: Hub):
     return WebSocketPhone(hub, config.phone_ws_port)
 
 
-def run_serve(play: bool = False, use_mic: bool = False, interval: float = None) -> int:
+def run_serve(play: bool = False, use_mic: bool = False, interval: float = None,
+              sensitivity: float = None) -> int:
     """The live phone-connected mode: serve the phone WS + the Pi TCP socket, and
-    narrate continuously from the Pi (when connected) or the laptop webcam.
+    narrate from the Pi (when connected) or the laptop webcam.
 
-    The phone switches personality/mode, sees the live line, plays the voice, and
-    pauses/resumes (set_running). Frames come from the Pi if present, else a
-    persistent laptop webcam. Default cadence is back-to-back (realtime); pass
-    --interval to add a gap. --play also speaks on the laptop (else the phone is
-    the speaker).
+    Change-gated (two-tier): a cheap watcher samples the view continuously and only
+    wakes the Claude vision call when the scene actually changes — so it reacts to
+    real events within ~1/fps instead of polling on a timer, costs nothing on a
+    static scene, and keeps watching while it speaks. The model still decides whether
+    a change is worth a line (SKIP otherwise). The phone switches personality/mode,
+    sees the live line, plays the voice, and pauses/resumes. --play also speaks on the
+    laptop (else the phone is the speaker); --sensitivity tunes the change threshold.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
     sentry_client.init()
@@ -331,38 +428,33 @@ def run_serve(play: bool = False, use_mic: bool = False, interval: float = None)
     if cam is not None and not cam.opened():
         cam.close()
         cam = None
-    if use_mic and not mic.available():
-        log.info("mic requested but unavailable (pip install sounddevice) — vision only")
-        use_mic = False
-    gap = 0.0 if interval is None else interval  # default: narrate back-to-back
 
-    log.info("phone WS on :%s · Pi on %s:%s · webcam=%s mic=%s · %s",
-             config.phone_ws_port, config.firmware_host, config.firmware_port,
-             "on" if cam else "off", "on" if use_mic else "off", config.summary())
+    rolling = _start_rolling_mic(use_mic)
+    change_threshold = _resolve_threshold(sensitivity)
+    observe_gap = 0.4 if interval is None else interval  # small beat after each line
 
     def local_frame():
-        if cam is not None:
-            f = cam.read()
-            if f:
-                return f
-        return frame_source.mock_frame()
+        return cam.read() if cam is not None else None   # a real frame, or None
+
+    # Pi frame if present, else webcam — the watcher samples this continuously.
+    watcher = FrameWatcher(lambda: hub.take_frame(local_frame), fps=config.watch_fps).start()
+
+    log.info("phone WS on :%s · Pi on %s:%s · webcam=%s mic=%s · change-gated "
+             "(thr=%.3f, %.0ffps, check-in %.0fs) · %s",
+             config.phone_ws_port, config.firmware_host, config.firmware_port,
+             "on" if cam else "off", "on" if rolling is not None else "off",
+             change_threshold, config.watch_fps, config.quiet_checkin_sec, config.summary())
 
     try:
-        while True:
-            if not hub.running:           # phone paused narration
-                time.sleep(0.15)
-                continue
-            if use_mic:
-                deepgram_stt.transcribe(mic.record(gap if gap > 0 else 4.0))
-            hub.take_event()              # (events also auto-fire cues on arrival)
-            frame = hub.take_frame(local_frame)   # Pi frame if present, else webcam
-            res = hub.narrate_once(frame)         # broadcasts line + voice to the phone
-            log.info("%s → %s (%.0fms)", res["personality"], res["line"], res["ms"]["total"])
-            if not use_mic and gap > 0:
-                time.sleep(gap)
+        _live_loop(hub, watcher, rolling=rolling, observe_gap=observe_gap,
+                   change_threshold=change_threshold,
+                   quiet_checkin=config.quiet_checkin_sec, label="serve")
     except KeyboardInterrupt:
         log.info("shutting down")
     finally:
+        watcher.stop()
+        if rolling is not None:
+            rolling.stop()
         if cam is not None:
             cam.close()
         server.shutdown()
@@ -390,16 +482,21 @@ def main(argv=None) -> int:
     parser.add_argument("--seconds", type=float, default=5.0,
                         help="talk mode: mic record length per turn")
     parser.add_argument("--interval", type=float, default=None,
-                        help="webcam mode: seconds between narrations (default LOOP_INTERVAL_SEC)")
+                        help="webcam/serve: small beat after each spoken line (default 0.4s)")
+    parser.add_argument("--sensitivity", type=float, default=None,
+                        help="webcam/serve: motion threshold 0-1 — LOWER reacts to smaller "
+                             "changes (more narration), higher = only big events (default CHANGE_THRESHOLD)")
     parser.add_argument("--iterations", type=int, default=3,
                         help="mock mode: how many narration cycles")
     args = parser.parse_args(argv)
     if args.talk:
         return run_talk(args.personality, args.image, args.seconds)
     if args.webcam:
-        return run_webcam(args.personality, args.interval, use_mic=args.mic)
+        return run_webcam(args.personality, args.interval, use_mic=args.mic,
+                          sensitivity=args.sensitivity)
     if args.serve:
-        return run_serve(play=args.play, use_mic=args.mic, interval=args.interval)
+        return run_serve(play=args.play, use_mic=args.mic, interval=args.interval,
+                         sensitivity=args.sensitivity)
     return run_mock(args.iterations, args.image, play=args.play)  # default = mock
 
 

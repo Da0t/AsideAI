@@ -23,7 +23,8 @@ def _media_type(frame: bytes) -> str:
     return "image/jpeg"
 
 
-def build(personality: dict, frame, speech: str = "", history=None) -> dict:
+def build(personality: dict, frame, speech: str = "", history=None,
+          decide: bool = False) -> dict:
     history = history or []
 
     has_frame = bool(frame)
@@ -57,8 +58,22 @@ def build(personality: dict, frame, speech: str = "", history=None) -> dict:
     if has_speech:
         lines.append(f'Overheard in the scene: "{speech}"')
     if history:
-        lines.append("Your recent lines (vary from these; you may call back): "
-                     + " | ".join(history[-3:]))
+        lines.append(
+            "Your memory — recent lines you've narrated this session (never repeat or "
+            "lightly reword them, but you MAY call back to them or build a running "
+            "gag for continuity): " + " | ".join(history[-8:]))
+    if decide:
+        # Comedic timing: the funniest narrator waits for the moment, then lands it.
+        lines.append(
+            "You are a COMEDIC narrator on a live feed, and great comedy is about "
+            "TIMING, not constant talking. Stay quiet through dull or unchanged "
+            "moments and wait for an opportune beat: someone enters, reacts, makes a "
+            "face, does something awkward or unexpected, a funny juxtaposition, or a "
+            "clear change. When a moment like that lands, deliver ONE genuinely funny, "
+            "sharp in-character line — a real punchline, not a safe generic observation. "
+            "Otherwise reply with exactly SKIP (one word, nothing else) — also SKIP if "
+            "the scene is basically the same as your recent lines."
+        )
 
     content.append({"type": "text", "text": "\n".join(lines)})
 
