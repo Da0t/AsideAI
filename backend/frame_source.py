@@ -25,6 +25,12 @@ def mock_frame() -> bytes:
     return _PLACEHOLDER_JPEG
 
 
+def load_image(path: str) -> bytes:
+    """Read an image file (JPEG/PNG) as raw bytes, to use as a frame."""
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def webcam_frame():
     """Capture one JPEG from the laptop webcam, or None if OpenCV is unavailable.
 

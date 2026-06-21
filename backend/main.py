@@ -145,7 +145,7 @@ def make_tcp_server(hub: Hub):
 
 # ── Modes ────────────────────────────────────────────────────────────────────
 
-def run_mock(iterations: int) -> int:
+def run_mock(iterations: int, image_path: str = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     print(f"[mock] {config.summary()}")
     hub = Hub()
@@ -153,10 +153,16 @@ def run_mock(iterations: int) -> int:
     if not slugs[0]:
         print("  (no personalities found in personalities/)")
         return 1
-    print(f"[mock] same frame, narrated by each personality:\n")
+    if image_path:
+        frame = frame_source.load_image(image_path)
+        print(f"[mock] frame: {image_path} ({len(frame)} bytes)")
+    else:
+        frame = frame_source.mock_frame()
+        print("[mock] frame: built-in placeholder (pass --image PATH for a real photo)")
+    print("[mock] same frame, narrated by each personality:\n")
     for i in range(iterations):
         bundle = hub.bundles[slugs[i % len(slugs)]]
-        res = hub.narrate_once(frame_source.mock_frame(), bundle=bundle)
+        res = hub.narrate_once(frame, bundle=bundle)
         print(f"  {res['personality']:>20} → {res['line']}")
         print(
             f"  {'':>20}   {res['ms']['total']:.0f}ms total "
@@ -213,10 +219,12 @@ def main(argv=None) -> int:
                         help="bind the Pi TCP socket + phone WS and run live")
     parser.add_argument("--iterations", type=int, default=3,
                         help="mock mode: how many narration cycles")
+    parser.add_argument("--image", type=str, default=None,
+                        help="mock mode: narrate this image file (JPEG/PNG) instead of the placeholder")
     args = parser.parse_args(argv)
     if args.serve:
         return run_serve()
-    return run_mock(args.iterations)  # default = mock
+    return run_mock(args.iterations, args.image)  # default = mock
 
 
 if __name__ == "__main__":

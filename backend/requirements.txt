@@ -4,9 +4,11 @@
 # Pi TCP server, and the Claude/Deepgram REST calls (via urllib) all work with no
 # installs. `python -m backend.main --mock` runs with nothing installed and no keys.
 #
-# Install this for the live/full experience:
+# Install these for the live/full experience:
 websockets         # phone channel (laptop <-> phone WebSocket). Without it the
 #                    phone channel is disabled but the loop still runs.
+certifi            # CA bundle for the HTTPS calls (fixes macOS-Python's empty
+#                    trust store -> CERTIFICATE_VERIFY_FAILED). Used if present.
 
 # Optional conveniences (each degrades gracefully if absent):
 # opencv-python    # webcam frame source for dev (else a placeholder frame)

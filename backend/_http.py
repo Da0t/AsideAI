@@ -5,14 +5,31 @@ never raises on HTTP error status — the caller inspects the code.
 """
 
 import json
+import ssl
 import urllib.error
 import urllib.request
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """TLS context backed by certifi's CA bundle when available.
+
+    Fixes the common macOS-Python 'CERTIFICATE_VERIFY_FAILED' (empty system trust
+    store) without requiring `requests`. Falls back to the system default.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        return ssl.create_default_context()
+
+
+_CTX = _ssl_context()
 
 
 def post(url: str, headers: dict, data: bytes, timeout: float = 30.0):
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_CTX) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()

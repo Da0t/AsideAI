@@ -66,10 +66,11 @@ class Config:
     def summary(self) -> str:
         def mark(ok: bool) -> str:
             return "live" if ok else "MOCK"
+        from .clients import redis_client  # lazy: reflects the real connection state
         return (
             f"claude={mark(self.has_anthropic)} "
             f"deepgram={mark(self.has_deepgram)} "
-            f"redis={'live' if self.redis_url else 'in-memory'} "
+            f"redis={'live' if redis_client.LIVE else 'in-memory'} "
             f"sentry={'on' if self.sentry_dsn else 'off'} "
             f"firmware_listen={self.firmware_host}:{self.firmware_port}"
         )

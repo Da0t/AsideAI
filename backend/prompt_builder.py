@@ -17,10 +17,17 @@ Returns a dict main.py hands to claude.narrate():
 import base64
 
 
+def _media_type(frame: bytes) -> str:
+    if frame[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    return "image/jpeg"
+
+
 def build(personality: dict, frame: bytes, speech: str = "", history=None) -> dict:
     history = history or []
 
-    b64 = base64.standard_b64encode(frame or b"").decode("ascii")
+    frame = frame or b""
+    b64 = base64.standard_b64encode(frame).decode("ascii")
 
     lines = ["Narrate this exact moment, in character. ONE short sentence. No preamble."]
     if speech:
@@ -31,7 +38,7 @@ def build(personality: dict, frame: bytes, speech: str = "", history=None) -> di
     content = [
         {
             "type": "image",
-            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+            "source": {"type": "base64", "media_type": _media_type(frame), "data": b64},
         },
         {"type": "text", "text": "\n".join(lines)},
     ]
