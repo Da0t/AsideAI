@@ -64,16 +64,27 @@ from the **repo root** (it's a package: `backend`).
 ```bash
 # Offline smoke loop — narrates a frame in all 3 personalities, no Pi/keys/installs
 python -m backend.main --mock
-python -m backend.main --mock --iterations 6
+python -m backend.main --mock --image room.jpg --play     # narrate a photo, out loud
+
+# Talk to it (laptop mic / Snowball -> STT -> Claude -> voice out loud)
+python -m backend.main --talk                              # push-to-talk
+python -m backend.main --talk --image room.jpg --personality goth-mommy
+
+# Watch it narrate the laptop WEBCAM live, out loud (Pi-camera stand-in)
+pip install opencv-python
+python -m backend.main --webcam                            # narrates every ~2s
+python -m backend.main --webcam --personality hype-man --interval 4
 
 # Tests (stdlib unittest)
 python -m unittest backend.tests.test_protocol backend.tests.test_prompt_builder
 
-# Live: bind the Pi TCP socket + phone WS, run the loop
+# Live with the Pi: bind the Pi TCP socket + phone WS, run the loop
 cp .env.example .env          # add ANTHROPIC_API_KEY, DEEPGRAM_API_KEY (optional: REDIS_URL, SENTRY_DSN)
-pip install -r backend/requirements.txt   # websockets (+ optional opencv/redis/sentry)
-python -m backend.main --serve
+pip install -r backend/requirements.txt   # websockets, certifi, sounddevice (+ optional opencv/redis/sentry)
+python -m backend.main --serve --play
 ```
+
+Full run/deploy flow (laptop + Pi): [../docs/DEPLOY.md](../docs/DEPLOY.md).
 
 **How "mock vs live" works:** each client checks for its key/dep and falls back to
 an offline stub if absent — Claude → canned per-personality lines, Deepgram TTS →

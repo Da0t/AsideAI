@@ -9,9 +9,12 @@ websockets         # phone channel (laptop <-> phone WebSocket). Without it the
 #                    phone channel is disabled but the loop still runs.
 certifi            # CA bundle for the HTTPS calls (fixes macOS-Python's empty
 #                    trust store -> CERTIFICATE_VERIFY_FAILED). Used if present.
+sounddevice        # laptop mic capture for `--talk` (bundles PortAudio on macOS;
+#                    auto-selects a Blue Yeti / Snowball if plugged in)
 
 # Optional conveniences (each degrades gracefully if absent):
-# opencv-python    # webcam frame source for dev (else a placeholder frame)
+# opencv-python    # required for `--webcam` (live laptop-camera narration, a
+#                    Pi-camera stand-in); also enables the webcam fallback in --serve
 # redis            # shared state across backend + frontend (else in-memory)
 # sentry-sdk       # reliability monitoring (else no-op)
 # python-dotenv    # .env loading (else a tiny built-in parser is used)

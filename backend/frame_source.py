@@ -34,18 +34,55 @@ def load_image(path: str) -> bytes:
 def webcam_frame():
     """Capture one JPEG from the laptop webcam, or None if OpenCV is unavailable.
 
-    Dev convenience for testing the loop with a real image before the Pi is wired.
+    One-shot (opens/closes the camera). For the continuous `--webcam` loop use the
+    persistent `Webcam` below — it keeps the camera open across frames.
     """
+    cam = open_webcam()
+    if cam is None:
+        return None
     try:
-        import cv2  # optional dependency (opencv-python)
+        return cam.read()
+    finally:
+        cam.close()
+
+
+class Webcam:
+    """A persistent laptop-webcam frame source: keeps the camera open and yields
+    downscaled JPEG frames. Stand-in for the Pi camera until the Pi is wired.
+    """
+
+    def __init__(self, index: int, max_dim: int):
+        import cv2
+        self._cv2 = cv2
+        self.cap = cv2.VideoCapture(index)
+        self.max_dim = max_dim
+
+    def opened(self) -> bool:
+        return bool(self.cap and self.cap.isOpened())
+
+    def _encode(self, frame) -> bytes:
+        """Downscale to max_dim on the long edge and JPEG-encode (numpy frame)."""
+        h, w = frame.shape[:2]
+        scale = self.max_dim / max(h, w)
+        if scale < 1.0:
+            frame = self._cv2.resize(frame, (int(w * scale), int(h * scale)))
+        ok, buf = self._cv2.imencode(".jpg", frame)
+        return buf.tobytes() if ok else None
+
+    def read(self):
+        """Return a downscaled JPEG from the camera, or None on a bad read."""
+        ok, frame = self.cap.read()
+        return self._encode(frame) if ok else None
+
+    def close(self) -> None:
+        if self.cap:
+            self.cap.release()
+
+
+def open_webcam(index: int = 0, max_dim: int = 768):
+    """Open the laptop webcam, or None if OpenCV isn't installed."""
+    try:
+        import cv2  # noqa: F401  (optional dependency)
     except ImportError:
         return None
-    cap = cv2.VideoCapture(0)
-    try:
-        ok, frame = cap.read()
-        if not ok:
-            return None
-        ok, buf = cv2.imencode(".jpg", frame)
-        return buf.tobytes() if ok else None
-    finally:
-        cap.release()
+    return Webcam(index, max_dim)

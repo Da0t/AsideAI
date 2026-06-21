@@ -23,25 +23,44 @@ def _media_type(frame: bytes) -> str:
     return "image/jpeg"
 
 
-def build(personality: dict, frame: bytes, speech: str = "", history=None) -> dict:
+def build(personality: dict, frame, speech: str = "", history=None) -> dict:
     history = history or []
 
-    frame = frame or b""
-    b64 = base64.standard_b64encode(frame).decode("ascii")
+    has_frame = bool(frame)
+    has_speech = bool(speech)
 
-    lines = ["Narrate this exact moment, in character. ONE short sentence. No preamble."]
-    if speech:
-        lines.append(f'Someone in the room just said: "{speech}"')
-    if history:
-        lines.append("Earlier lines you may call back to: " + " | ".join(history[-3:]))
-
-    content = [
-        {
+    content = []
+    if has_frame:  # vision: include the camera frame as an image block
+        b64 = base64.standard_b64encode(frame).decode("ascii")
+        content.append({
             "type": "image",
             "source": {"type": "base64", "media_type": _media_type(frame), "data": b64},
-        },
-        {"type": "text", "text": "\n".join(lines)},
-    ]
+        })
+
+    # Bodycam model: the image is the wearer's first-person view; the speech is
+    # AMBIENT audio overheard in the scene. NARRATE the moment as an outside
+    # observer (third person) — never address the wearer or anyone in frame.
+    if has_frame and has_speech:
+        instr = ("This is your bodycam view, and this is what can be heard right now. "
+                 "Narrate this moment — what's happening in front of you and what's being "
+                 "said — in character, as an outside observer. ONE short sentence. "
+                 "No preamble; do NOT address anyone or say 'you'.")
+    elif has_frame:
+        instr = ("This is your bodycam view. Narrate what's happening in front of you, in "
+                 "character, as an outside observer. ONE short sentence. "
+                 "No preamble; do NOT address anyone or say 'you'.")
+    else:
+        instr = ("Narrate this moment from what can be heard, in character, as an outside "
+                 "observer. ONE short sentence. No preamble; do NOT address anyone.")
+
+    lines = [instr]
+    if has_speech:
+        lines.append(f'Overheard in the scene: "{speech}"')
+    if history:
+        lines.append("Your recent lines (vary from these; you may call back): "
+                     + " | ".join(history[-3:]))
+
+    content.append({"type": "text", "text": "\n".join(lines)})
 
     return {
         "system": personality.get("claude_system_prompt", ""),

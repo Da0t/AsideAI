@@ -27,8 +27,24 @@ def latest_transcript() -> str:
     return _latest
 
 
+def _pcm_to_wav(pcm: bytes, rate: int) -> bytes:
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
 def transcribe(pcm: bytes, sample_rate: int = 16000) -> str:
-    """Prerecorded STT over REST. Real with a key; "" in mock mode or on error."""
+    """Prerecorded STT over REST. Real with a key; "" in mock mode or on error.
+
+    Wraps the raw PCM in a WAV container so Deepgram auto-detects the format.
+    """
     global _latest
     if not config.has_deepgram or not pcm:
         return _latest
@@ -36,9 +52,9 @@ def transcribe(pcm: bytes, sample_rate: int = 16000) -> str:
         _API_URL,
         headers={
             "authorization": f"Token {config.deepgram_api_key}",
-            "content-type": f"audio/L16;rate={sample_rate}",
+            "content-type": "audio/wav",
         },
-        data=pcm,
+        data=_pcm_to_wav(pcm, sample_rate),
     )
     if status != 200:
         log.warning("Deepgram STT HTTP %s: %s", status, body[:200])

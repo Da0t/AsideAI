@@ -21,7 +21,7 @@ import threading
 import time
 
 from .config import config
-from . import protocol, prompt_builder, personalities, frame_source
+from . import protocol, prompt_builder, personalities, frame_source, audio_out, mic
 from .clients import claude, deepgram_tts, deepgram_stt, redis_client, sentry_client
 
 log = logging.getLogger("narrator")
@@ -52,6 +52,7 @@ class Hub:
         self.audio_buf = bytearray()
         self.pending_event = None
         self.phone = NoopPhone()
+        self.play_audio = False  # play narration out loud on this laptop (afplay)
 
     # --- inbound from the Pi (called by the TCP handler) ---
 
@@ -100,6 +101,8 @@ class Hub:
         audio = deepgram_tts.speak(line, bundle.get("deepgram_voice", ""))  # VOICE
         t3 = time.monotonic()
 
+        if self.play_audio:
+            audio_out.play(audio)  # blocks until the line finishes speaking
         redis_client.append_line(line)
         self.phone.broadcast({"type": "line", "text": line, "personality": bundle.get("slug")})
         self.phone.broadcast_voice(audio, {"format": "audio", "personality": bundle.get("slug")})
@@ -145,10 +148,11 @@ def make_tcp_server(hub: Hub):
 
 # ── Modes ────────────────────────────────────────────────────────────────────
 
-def run_mock(iterations: int, image_path: str = None) -> int:
+def run_mock(iterations: int, image_path: str = None, play: bool = False) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     print(f"[mock] {config.summary()}")
     hub = Hub()
+    hub.play_audio = play
     slugs = list(hub.bundles.keys()) or [""]
     if not slugs[0]:
         print("  (no personalities found in personalities/)")
@@ -173,6 +177,122 @@ def run_mock(iterations: int, image_path: str = None) -> int:
     return 0
 
 
+def run_talk(personality_slug: str = None, image_path: str = None,
+             seconds: float = 5.0) -> int:
+    """Interactive: talk into the laptop mic (Snowball if present), it talks back.
+
+    Push-to-talk: press Enter, speak for `seconds`, and it narrates back out loud
+    in character. Pass --image to also give it something to see; otherwise it just
+    responds to what you say.
+    """
+    logging.basicConfig(level=logging.WARNING, format="%(message)s")  # quiet client logs
+    print(f"[talk] {config.summary()}")
+    if not mic.available():
+        print("[talk] no mic capture available — `pip install sounddevice`.")
+        return 1
+    if not (config.has_anthropic and config.has_deepgram):
+        print("[talk] heads-up: ANTHROPIC/DEEPGRAM keys missing — replies will be mock/silent.")
+
+    hub = Hub()
+    hub.play_audio = True
+    bundle = hub.bundles.get(personality_slug) if personality_slug else None
+    bundle = bundle or hub.active_bundle()
+    frame = frame_source.load_image(image_path) if image_path else None
+
+    print(f"[talk] personality = {bundle.get('slug')}  ·  voice = {bundle.get('deepgram_voice')}")
+    print(f"[talk] mic = {mic.device_name()}")
+    print(f"[talk] seeing = {('image: ' + image_path) if image_path else 'nothing (voice-only; pass --image for vision)'}")
+    print("[talk] Press Enter to speak, Ctrl-C to quit.\n")
+    try:
+        while True:
+            input("  [Enter] to talk… ")
+            print(f"  🎤 listening {seconds:.0f}s — speak now…")
+            pcm = mic.record(seconds)
+            transcript = deepgram_stt.transcribe(pcm)
+            print(f'  you: "{transcript or "(nothing heard)"}"')
+            res = hub.narrate_once(frame, bundle=bundle)  # speech pulled from STT
+            print(f"  {bundle.get('slug')}: {res['line']}")
+            print(f"  ({res['ms']['total']:.0f}ms · {res['audio_bytes']}B)\n")
+    except KeyboardInterrupt:
+        print("\n[talk] bye.")
+    return 0
+
+
+def run_webcam(personality_slug: str = None, interval: float = None,
+               play: bool = True, use_mic: bool = False) -> int:
+    """Continuously narrate what the LAPTOP WEBCAM sees, out loud.
+
+    A stand-in for the Pi camera until it's wired — watch it narrate live. With
+    use_mic, it also LISTENS each round (Snowball/laptop mic -> STT) so it reacts
+    to what you say while it watches. Same Hub/loop the Pi feeds; only the sources
+    differ.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    print(f"[webcam] {config.summary()}")
+    cam = frame_source.open_webcam(max_dim=config.frame_max_dim)
+    if cam is None:
+        print("[webcam] OpenCV not installed — `pip install opencv-python`.")
+        return 1
+    if not cam.opened():
+        print("[webcam] couldn't open the camera (grant camera permission, or check the index).")
+        cam.close()
+        return 1
+    if not (config.has_anthropic and config.has_deepgram):
+        print("[webcam] heads-up: ANTHROPIC/DEEPGRAM keys missing — narration will be mock/silent.")
+    if use_mic and not mic.available():
+        print("[webcam] mic requested but unavailable (`pip install sounddevice`) — webcam only.")
+        use_mic = False
+
+    hub = Hub()
+    hub.play_audio = play
+    bundle = hub.bundles.get(personality_slug) if personality_slug else None
+    interval = config.loop_interval_sec if interval is None else interval
+
+    active = (bundle or hub.active_bundle()).get("slug")
+    # Confirm we can actually read frames (camera permission / device index) so a
+    # denied camera fails loudly instead of spinning silently.
+    probe = None
+    for _ in range(20):
+        probe = cam.read()
+        if probe:
+            break
+        time.sleep(0.1)
+    if not probe:
+        print("[webcam] camera opened but returned no frames.")
+        print("         Grant Camera permission to your terminal app:")
+        print("         System Settings → Privacy & Security → Camera, then retry.")
+        cam.close()
+        return 1
+
+    mic_note = f" · 🎤 mic ON ({mic.device_name()}) — talk while it watches" if use_mic else ""
+    print(f"[webcam] narrating live · personality={active} · every ~{interval:.1f}s{mic_note} · Ctrl-C to quit\n")
+    try:
+        while True:
+            if use_mic:
+                print(f"  🎤 listening {interval:.0f}s…", flush=True)
+                heard = deepgram_stt.transcribe(mic.record(interval))  # blocks ~interval
+                if heard:
+                    print(f'  you: "{heard}"')
+            frame = cam.read()
+            if not frame:
+                time.sleep(0.1)
+                continue
+            b = bundle or hub.active_bundle()
+            print("  🔊 speaking…", flush=True)
+            res = hub.narrate_once(frame, bundle=b)   # plays out loud (afplay blocks)
+            print(f"  {res['personality']}: {res['line']}  ({res['ms']['total']:.0f}ms)")
+            if not use_mic:
+                time.sleep(interval)
+    except KeyboardInterrupt:
+        print("\n[webcam] bye.")
+    finally:
+        try:
+            cam.close()
+        except Exception:  # noqa: BLE001 — don't dump a traceback on Ctrl-C during shutdown
+            pass
+    return 0
+
+
 def _start_phone(hub: Hub):
     """Return a phone channel: a WebSocket server if `websockets` is installed,
     otherwise Noop (logs only). The WS path is the real frontend channel."""
@@ -184,10 +304,11 @@ def _start_phone(hub: Hub):
     return WebSocketPhone(hub, config.phone_ws_port)
 
 
-def run_serve() -> int:
+def run_serve(play: bool = False) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
     sentry_client.init()
     hub = Hub()
+    hub.play_audio = play
     hub.phone = _start_phone(hub)
 
     server = make_tcp_server(hub)
@@ -215,16 +336,34 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="The Narrator — laptop backend")
     parser.add_argument("--mock", action="store_true",
                         help="offline smoke loop (no Pi, no keys, no installs)")
+    parser.add_argument("--talk", action="store_true",
+                        help="interactive: talk into the laptop mic, it talks back out loud")
+    parser.add_argument("--webcam", action="store_true",
+                        help="continuously narrate the laptop webcam out loud (Pi-camera stand-in)")
+    parser.add_argument("--mic", action="store_true",
+                        help="with --webcam: also listen each round (talk to it while it watches)")
     parser.add_argument("--serve", action="store_true",
                         help="bind the Pi TCP socket + phone WS and run live")
+    parser.add_argument("--play", action="store_true",
+                        help="play narration out loud on this laptop (afplay)")
+    parser.add_argument("--image", type=str, default=None,
+                        help="narrate this image file (JPEG/PNG) instead of the placeholder")
+    parser.add_argument("--personality", type=str, default=None,
+                        help="talk mode: which personality (slug); default = active")
+    parser.add_argument("--seconds", type=float, default=5.0,
+                        help="talk mode: mic record length per turn")
+    parser.add_argument("--interval", type=float, default=None,
+                        help="webcam mode: seconds between narrations (default LOOP_INTERVAL_SEC)")
     parser.add_argument("--iterations", type=int, default=3,
                         help="mock mode: how many narration cycles")
-    parser.add_argument("--image", type=str, default=None,
-                        help="mock mode: narrate this image file (JPEG/PNG) instead of the placeholder")
     args = parser.parse_args(argv)
+    if args.talk:
+        return run_talk(args.personality, args.image, args.seconds)
+    if args.webcam:
+        return run_webcam(args.personality, args.interval, use_mic=args.mic)
     if args.serve:
-        return run_serve()
-    return run_mock(args.iterations, args.image)  # default = mock
+        return run_serve(play=args.play)
+    return run_mock(args.iterations, args.image, play=args.play)  # default = mock
 
 
 if __name__ == "__main__":
