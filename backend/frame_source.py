@@ -78,6 +78,38 @@ def change_score(sig_a, sig_b) -> float:
     return total / (len(sig_a) * 255.0)
 
 
+def color_correct(jpeg: bytes, strength: float = 0.8) -> bytes:
+    """Gray-world auto white balance on JPEG bytes.
+
+    Neutralizes a color cast — e.g. the Pi camera's green/blue fluorescent tint —
+    so narration describes the true scene instead of fixating on the lighting, and
+    the phone's live feed looks natural. `strength` blends original→fully-corrected
+    (0 = off, 1 = full); a value below 1 guards against over-correcting scenes that
+    are genuinely dominated by one color. Returns the input unchanged on any failure
+    (deps missing, undecodable, or a near-black frame) so the loop never breaks.
+    """
+    if not jpeg or strength <= 0:
+        return jpeg
+    try:
+        import io
+        import numpy as np
+        from PIL import Image
+
+        im = Image.open(io.BytesIO(jpeg)).convert("RGB")
+        arr = np.asarray(im, dtype=np.float32)
+        means = arr.reshape(-1, 3).mean(0)
+        if float(means.min()) < 1.0:            # a dead channel — don't divide
+            return jpeg
+        gains = float(means.mean()) / means     # scale each channel toward neutral gray
+        gains = 1.0 + (gains - 1.0) * float(strength)   # blend by strength
+        arr = np.clip(arr * gains, 0, 255).astype("uint8")
+        out = io.BytesIO()
+        Image.fromarray(arr, "RGB").save(out, "JPEG", quality=85)
+        return out.getvalue()
+    except Exception:  # noqa: BLE001 — correction is best-effort; never break the loop
+        return jpeg
+
+
 def webcam_frame():
     """Capture one JPEG from the laptop webcam, or None if OpenCV is unavailable.
 

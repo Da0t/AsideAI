@@ -330,6 +330,13 @@ def _resolve_threshold(sensitivity):
     return max(0.0, min(1.0, sensitivity))
 
 
+def _resolve_awb(strength):
+    """CLI --awb-strength overrides the configured white-balance strength (0..1)."""
+    if strength is None:
+        return config.awb_strength
+    return max(0.0, min(1.0, strength))
+
+
 def _live_loop(hub: "Hub", watcher: FrameWatcher, *, bundle: dict = None,
                rolling=None, observe_gap: float, change_threshold: float,
                quiet_checkin: float, label: str = "live") -> None:
@@ -389,7 +396,7 @@ def _live_loop(hub: "Hub", watcher: FrameWatcher, *, bundle: dict = None,
 
 def run_webcam(personality_slug: str = None, interval: float = None,
                play: bool = True, use_mic: bool = False,
-               sensitivity: float = None) -> int:
+               sensitivity: float = None, awb_strength: float = None) -> int:
     """Continuously narrate what the LAPTOP WEBCAM sees, out loud.
 
     A stand-in for the Pi camera until it's wired — watch it narrate live. With
@@ -433,8 +440,10 @@ def run_webcam(personality_slug: str = None, interval: float = None,
 
     rolling = _start_rolling_mic(use_mic)
     change_threshold = _resolve_threshold(sensitivity)
+    awb = _resolve_awb(awb_strength)
     observe_gap = 0.4 if interval is None else interval
-    watcher = FrameWatcher(cam.read, fps=config.watch_fps).start()
+    watcher = FrameWatcher(lambda: frame_source.color_correct(cam.read(), awb),
+                           fps=config.watch_fps).start()
     hub.watcher = watcher
 
     mic_note = f" · 🎤 mic ON ({mic.device_name()})" if rolling is not None else ""
@@ -470,7 +479,8 @@ def _start_phone(hub: Hub):
 
 
 def run_serve(play: bool = False, use_mic: bool = False, interval: float = None,
-              sensitivity: float = None, no_webcam: bool = False) -> int:
+              sensitivity: float = None, no_webcam: bool = False,
+              awb_strength: float = None) -> int:
     """The live phone-connected mode: serve the phone WS + the Pi TCP socket, and
     narrate from the Pi (when connected) or the laptop webcam.
 
@@ -504,13 +514,18 @@ def run_serve(play: bool = False, use_mic: bool = False, interval: float = None,
 
     rolling = _start_rolling_mic(use_mic)
     change_threshold = _resolve_threshold(sensitivity)
+    awb = _resolve_awb(awb_strength)
     observe_gap = 0.4 if interval is None else interval  # small beat after each line
 
     def local_frame():
         return cam.read() if cam is not None else None   # a real frame, or None
 
-    # Pi frame if present, else webcam — the watcher samples this continuously.
-    watcher = FrameWatcher(lambda: hub.take_frame(local_frame), fps=config.watch_fps).start()
+    # Pi frame if present, else webcam — white-balanced once here, so Claude, the
+    # phone feed, and change-detection all see the color-corrected frame.
+    def source():
+        return frame_source.color_correct(hub.take_frame(local_frame), awb)
+
+    watcher = FrameWatcher(source, fps=config.watch_fps).start()
     hub.watcher = watcher  # let Pi "narrate now" events wake the loop
 
     # Forward the live camera feed to the phone's Vision screen, throttled. Reuses the
@@ -529,10 +544,10 @@ def run_serve(play: bool = False, use_mic: bool = False, interval: float = None,
 
     cam_mode = "off (Pi-only)" if no_webcam else ("fallback" if cam else "unavailable")
     log.info("phone WS on :%s · Pi on %s:%s · laptop-cam=%s mic=%s · live-feed=%.0ffps · "
-             "change-gated (thr=%.3f, %.0ffps, check-in %.0fs) · %s",
+             "awb=%.2f · change-gated (thr=%.3f, %.0ffps, check-in %.0fs) · %s",
              config.phone_ws_port, config.firmware_host, config.firmware_port,
              cam_mode, "on" if rolling is not None else "off", config.phone_frame_fps,
-             change_threshold, config.watch_fps, config.quiet_checkin_sec, config.summary())
+             awb, change_threshold, config.watch_fps, config.quiet_checkin_sec, config.summary())
     if no_webcam:
         log.info("Pi-only mode: waiting for camera frames from the Pi on "
                  "%s:%s …", config.firmware_host, config.firmware_port)
@@ -582,6 +597,9 @@ def main(argv=None) -> int:
     parser.add_argument("--sensitivity", type=float, default=None,
                         help="webcam/serve: motion threshold 0-1 — LOWER reacts to smaller "
                              "changes (more narration), higher = only big events (default CHANGE_THRESHOLD)")
+    parser.add_argument("--awb-strength", type=float, default=None,
+                        help="webcam/serve: auto white-balance strength 0-1 (0=off, 1=full) — "
+                             "neutralizes the camera's color cast (default AWB_STRENGTH=0.8)")
     parser.add_argument("--iterations", type=int, default=3,
                         help="mock mode: how many narration cycles")
     args = parser.parse_args(argv)
@@ -589,10 +607,11 @@ def main(argv=None) -> int:
         return run_talk(args.personality, args.image, args.seconds)
     if args.webcam:
         return run_webcam(args.personality, args.interval, use_mic=args.mic,
-                          sensitivity=args.sensitivity)
+                          sensitivity=args.sensitivity, awb_strength=args.awb_strength)
     if args.serve:
         return run_serve(play=args.play, use_mic=args.mic, interval=args.interval,
-                         sensitivity=args.sensitivity, no_webcam=args.no_webcam)
+                         sensitivity=args.sensitivity, no_webcam=args.no_webcam,
+                         awb_strength=args.awb_strength)
     return run_mock(args.iterations, args.image, play=args.play)  # default = mock
 
 

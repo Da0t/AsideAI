@@ -68,6 +68,9 @@ class Config:
         self.change_threshold = float(os.environ.get("CHANGE_THRESHOLD", "0.03"))
         # How often a quiet, unchanged scene still gets a look (lower = chattier).
         self.quiet_checkin_sec = float(os.environ.get("QUIET_CHECKIN_SEC", "8"))
+        # Gray-world auto white balance strength (0=off, 1=full) — neutralizes the
+        # Pi camera's fluorescent color cast so narration stops fixating on it.
+        self.awb_strength = float(os.environ.get("AWB_STRENGTH", "0.8"))
 
     @property
     def has_anthropic(self) -> bool:

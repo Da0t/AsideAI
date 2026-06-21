@@ -55,6 +55,11 @@ def build(personality: dict, frame, speech: str = "", history=None,
                  "observer. ONE short sentence. No preamble; do NOT address anyone.")
 
     lines = [instr]
+    if has_frame:
+        # Keep the narrator on the subjects and action, not the room's lighting —
+        # otherwise it fixates on ambiance (e.g. "fluorescent") line after line.
+        lines.append("Focus on the people, objects, and what's happening — not the "
+                     "room's lighting, color temperature, or general ambiance.")
     if has_speech:
         lines.append(f'Overheard in the scene: "{speech}"')
     if history:
