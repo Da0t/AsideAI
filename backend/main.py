@@ -61,6 +61,9 @@ class NoopPhone:
     def broadcast_voice(self, audio: bytes, meta: dict) -> None:
         log.debug("phone <- voice (%d bytes)", len(audio))
 
+    def broadcast_frame(self, jpeg: bytes, meta: dict) -> None:
+        log.debug("phone <- frame (%d bytes)", len(jpeg))
+
 
 # ── Shared state + the live loop ─────────────────────────────────────────────
 
@@ -510,11 +513,25 @@ def run_serve(play: bool = False, use_mic: bool = False, interval: float = None,
     watcher = FrameWatcher(lambda: hub.take_frame(local_frame), fps=config.watch_fps).start()
     hub.watcher = watcher  # let Pi "narrate now" events wake the loop
 
+    # Forward the live camera feed to the phone's Vision screen, throttled. Reuses the
+    # watcher's latest frame + signature (no extra decode) and skips blank frames.
+    fwd_stop = threading.Event()
+
+    def _forward_frames():
+        period = 1.0 / max(1.0, config.phone_frame_fps)
+        while not fwd_stop.is_set():
+            jpeg, sig = watcher.current()
+            if jpeg and not frame_source._is_blank_sig(sig):
+                hub.phone.broadcast_frame(jpeg, {})
+            fwd_stop.wait(period)
+
+    threading.Thread(target=_forward_frames, name="phone-frame-forwarder", daemon=True).start()
+
     cam_mode = "off (Pi-only)" if no_webcam else ("fallback" if cam else "unavailable")
-    log.info("phone WS on :%s · Pi on %s:%s · laptop-cam=%s mic=%s · change-gated "
-             "(thr=%.3f, %.0ffps, check-in %.0fs) · %s",
+    log.info("phone WS on :%s · Pi on %s:%s · laptop-cam=%s mic=%s · live-feed=%.0ffps · "
+             "change-gated (thr=%.3f, %.0ffps, check-in %.0fs) · %s",
              config.phone_ws_port, config.firmware_host, config.firmware_port,
-             cam_mode, "on" if rolling is not None else "off",
+             cam_mode, "on" if rolling is not None else "off", config.phone_frame_fps,
              change_threshold, config.watch_fps, config.quiet_checkin_sec, config.summary())
     if no_webcam:
         log.info("Pi-only mode: waiting for camera frames from the Pi on "
@@ -527,6 +544,7 @@ def run_serve(play: bool = False, use_mic: bool = False, interval: float = None,
     except KeyboardInterrupt:
         log.info("shutting down")
     finally:
+        fwd_stop.set()
         watcher.stop()
         if rolling is not None:
             rolling.stop()

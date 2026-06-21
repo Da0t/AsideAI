@@ -68,6 +68,9 @@ android/
 *.rdb
 dump.rdb
 
+# ─── Generated QR codes (Expo connect) ──────────────────────────────────────
+qr.png
+
 # ─── Logs ───────────────────────────────────────────────────────────────────
 *.log
 npm-debug.*

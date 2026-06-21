@@ -91,6 +91,15 @@ class WebSocketPhone:
             "personality": meta.get("personality"),
         }))
 
+    def broadcast_frame(self, jpeg: bytes, meta: dict) -> None:
+        # Live camera feed for the phone's Vision screen. Shape matches the frontend's
+        # `case 'frame'` handler: data:<mime>;base64,<data>.
+        self._send_all(json.dumps({
+            "type": "frame",
+            "mime": "image/jpeg",
+            "data": base64.b64encode(jpeg).decode("ascii"),
+        }))
+
     def _send_all(self, data) -> None:
         if not self.clients:
             return

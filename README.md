@@ -128,6 +128,62 @@ Then follow the README in each component:
 - [backend/README.md](backend/README.md)
 - [frontend/README.md](frontend/README.md)
 
+## Running It End-to-End (live demo)
+
+The working laptop + phone + Pi demo. All three devices must be on the **same
+Wi-Fi** — a phone hotspot is most reliable (campus/corporate Wi-Fi often blocks
+device-to-device traffic and may not let the Pi join).
+
+**One-time setup**
+
+- **Laptop:** `cp .env.example .env` and fill in `ANTHROPIC_API_KEY`,
+  `DEEPGRAM_API_KEY`, and `REDIS_URL` (`redis://localhost:6379`). Then
+  `brew install redis && brew services start redis` and
+  `pip install opencv-python sounddevice certifi websockets redis pillow`.
+- **Frontend:** `cd frontend && npm install`.
+- **Pi (QNX):** copy `firmware/pi_frame_sender.py` onto the Pi and
+  `sudo apk add libjpeg-turbo-utils` (provides `cjpeg`).
+
+**Each run**
+
+1. **Get the laptop's LAN IP** — everything points at this:
+   ```bash
+   ipconfig getifaddr en0          # e.g. 172.20.10.14  → use as <laptop-ip>
+   ```
+2. **Laptop — backend + app** (one command):
+   ```bash
+   ./start.sh --no-webcam          # Pi-only camera; drop --no-webcam to fall back to the laptop cam
+   ```
+   Runs the backend (logs → `backend.log`) and Expo (prints a QR). Add `--play`
+   to also hear narration on the laptop (otherwise the phone is the speaker).
+3. **Pi — camera sender** (SSH in, then run):
+   ```bash
+   ssh -m hmac-sha2-256 qnxuser@qnxpi20.local              # password: qnxuser
+   sudo python3 pi_frame_sender.py --host <laptop-ip> --port 8765 --interval 0.5
+   ```
+   Expect `[net] connected` then `[frame N] … JPEG` scrolling.
+4. **Phone — connect:** scan the Expo QR (or open `exp://<laptop-ip>:8081` in
+   Expo Go), on the same Wi-Fi. The **AI Vision** screen shows the live Pi feed;
+   narration plays as voice.
+5. **Verify** (laptop): `tail -f backend.log` → look for
+   `📷 receiving camera frames from Pi`, lines tagged `cam=pi`, and `🎤 [mic] heard:`.
+
+**Switch personality live** (or tap it on the phone's home screen):
+```bash
+redis-cli set narrator:personality hype-man     # or goth-mommy, epic-quest-narrator
+```
+
+**Ports:** `8765` Pi → backend · `8780` backend → phone (WebSocket) · `8081` Expo.
+
+**Troubleshooting**
+
+- *Vision screen stuck on "No Signal", or it's narrating the laptop cam:* the Pi
+  sender isn't reaching the laptop — check the Pi terminal for
+  `connection failed, retrying` (wrong `--host`), and that both are on the same Wi-Fi.
+- *`ssh` "host key changed"* after a Pi reboot: `ssh-keygen -R qnxpi20.local`, retry.
+- *No audio on the phone:* the laptop mic (`--mic`, on by default) feeds STT and the
+  voice plays on the phone; add `--play` to also hear it on the laptop.
+
 ## Design Rules
 
 These are load-bearing. Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -142,5 +198,7 @@ These are load-bearing. Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.
 5. **Everything is free.** No payment, no paid tiers.
 6. **The journal is async**, off the live loop, and built last.
 
-> Hackathon scaffold — this repo is documentation and structure only. Every
-> module is a TODO stub. See [docs/BUILD_ORDER.md](docs/BUILD_ORDER.md) to start.
+> Status: the backend + phone app + Pi frame sender run **end-to-end today** (see
+> [Running It End-to-End](#running-it-end-to-end-live-demo)). The QNX C++ firmware
+> and the Midjourney journal remain TODO stubs — see
+> [docs/BUILD_ORDER.md](docs/BUILD_ORDER.md).

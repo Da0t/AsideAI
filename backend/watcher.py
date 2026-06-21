@@ -60,6 +60,12 @@ class FrameWatcher:
                     self._frame, self._sig = jpeg, sig
             self._stop.wait(self._period)
 
+    def current(self):
+        """The latest sampled frame and its signature: (jpeg_or_None, sig_or_None).
+        Used to forward the live feed to the phone without re-reading the source."""
+        with self._lock:
+            return self._frame, self._sig
+
     def mark_consumed(self) -> None:
         """Anchor change detection to the current frame. Call right after narrating
         (or SKIP-ing) it, so further change is measured from what we just looked at —

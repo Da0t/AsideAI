@@ -47,6 +47,8 @@ class Config:
 
         # Phone WebSocket (served to the frontend over the LAN)
         self.phone_ws_port = int(os.environ.get("PHONE_WS_PORT", "8780"))
+        # Live camera feed forwarded to the phone's Vision screen (frames/sec).
+        self.phone_frame_fps = float(os.environ.get("PHONE_FRAME_FPS", "4"))
 
         # Live-loop tunables (design rule: stay ~1-2s, narration SHORT)
         self.claude_model = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
