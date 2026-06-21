@@ -9,6 +9,7 @@ terminal/IDE, or recordings come back silent.
 """
 
 import logging
+import threading
 
 log = logging.getLogger("mic")
 
@@ -60,3 +61,50 @@ def record(seconds: float = 5.0, rate: int = SAMPLE_RATE) -> bytes:
     )
     sd.wait()
     return frames.tobytes()
+
+
+class RollingMic:
+    """Continuous background mic capture into a ring buffer.
+
+    The live loop grabs the last few seconds of audio with recent() instead of
+    blocking on record() — so the visual change-detector keeps sampling while we
+    listen, rather than the loop stalling for the whole record window each cycle.
+    """
+
+    def __init__(self, rate: int = SAMPLE_RATE, seconds: float = 10.0):
+        self.rate = rate
+        self._maxbytes = int(rate * seconds) * 2  # s16le => 2 bytes/sample
+        self._buf = bytearray()
+        self._lock = threading.Lock()
+        self._stream = None
+
+    def start(self) -> "RollingMic":
+        import sounddevice as sd  # lazy: --mock never needs it
+
+        def _cb(indata, frames, time_info, status):  # PortAudio thread
+            with self._lock:
+                self._buf.extend(bytes(indata))
+                if len(self._buf) > self._maxbytes:
+                    del self._buf[: len(self._buf) - self._maxbytes]
+
+        self._stream = sd.InputStream(
+            samplerate=self.rate, channels=1, dtype="int16",
+            device=pick_input_device(), callback=_cb,
+        )
+        self._stream.start()
+        return self
+
+    def recent(self, seconds: float) -> bytes:
+        """Return up to the last `seconds` of captured PCM (s16le mono)."""
+        n = int(self.rate * seconds) * 2
+        with self._lock:
+            return bytes(self._buf[-n:])
+
+    def stop(self) -> None:
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:  # noqa: BLE001 — don't raise during shutdown
+                pass
+            self._stream = None

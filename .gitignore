@@ -63,6 +63,11 @@ android/
 # Metro
 .metro-health-check*
 
+# ─── Redis (laptop agent-memory store) ──────────────────────────────────────
+# Local Redis snapshot — runtime state, never source.
+*.rdb
+dump.rdb
+
 # ─── Logs ───────────────────────────────────────────────────────────────────
 *.log
 npm-debug.*
