@@ -260,6 +260,29 @@ You'll get the terminal output like before — watch for these two lines:
 [frame 2]  ...
 Leave this terminal open — the sender runs here.
 
+
+
+
+
+atch the narration live (check it's working)
+￼
+tail -f /Users/datnguyen/Desktop/PROJECTS/AsideAI/backend.log
+You'll see → … (cam=pi) lines and 🎤 [mic] heard: lines. Move in front of the camera to trigger new lines (it waits for the scene to change). Ctrl-C stops watching (backend keeps running).
+
+Switch personality (test each one)
+Run in another terminal — takes effect on the next line, no restart:
+
+￼
+redis-cli set narrator:personality hype-man
+redis-cli set narrator:personality goth-mommy
+redis-cli set narrator:personality epic-quest-narrator
+Watch the tail window — the character and the voice change. (Currently on epic-quest-narrator.)
+
+Small note: I see two Pi sessions connected — you may have started the sender twice. Harmless (both just send frames), but if you want it clean, Ctrl-C one of them.
+
+Run the tail and try switching to hype-man — you should see the tone flip immediately. Tell me how it looks and whether the AWB color fix is holding (natural descriptions, no "fluorescent")
+
+
 C. Then the phone
 Scan the QR from earlier (exp://172.20.10.14:8081) in Expo Go.
 
