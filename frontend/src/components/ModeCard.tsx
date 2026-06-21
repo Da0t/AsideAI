@@ -28,7 +28,7 @@ export default function ModeCard({
         </Pressable>
       </View>
       <View style={styles.right}>
-        <Text style={styles.label}>Live</Text>
+        <Text style={styles.label}>Playing</Text>
         <Switch checked={live} onChange={onToggleLive} accentColor={accentColor} />
       </View>
     </View>

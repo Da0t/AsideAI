@@ -1,26 +1,35 @@
 import { View, Text, Pressable, Animated, StyleSheet, Easing } from 'react-native';
 import { useEffect, useRef } from 'react';
+import { Play, Pause } from 'lucide-react-native';
 import { usePress } from './usePress';
 import { colors, fonts, textSize, glowShadow } from '../theme/tokens';
 
 interface GoLiveButtonProps {
+  playing: boolean;
   narrating: boolean;
   sharing: boolean;
   onPress: () => void;
 }
 
 function SignalArc({ delay, size }: { delay: number; size: number }) {
+  const scale = useRef(new Animated.Value(0.7)).current;
   const opacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.loop(
       Animated.sequence([
         Animated.delay(delay),
-        Animated.timing(opacity, { toValue: 0.6, duration: 400, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0, duration: 600, easing: Easing.in(Easing.ease), useNativeDriver: true }),
+        Animated.parallel([
+          Animated.timing(scale, { toValue: 1, duration: 1200, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+          Animated.sequence([
+            Animated.timing(opacity, { toValue: 0.5, duration: 400, useNativeDriver: true }),
+            Animated.timing(opacity, { toValue: 0, duration: 800, useNativeDriver: true }),
+          ]),
+        ]),
+        Animated.timing(scale, { toValue: 0.7, duration: 0, useNativeDriver: true }),
       ]),
     ).start();
-  }, [delay, opacity]);
+  }, [delay, scale, opacity]);
 
   return (
     <Animated.View
@@ -32,41 +41,45 @@ function SignalArc({ delay, size }: { delay: number; size: number }) {
         borderWidth: 2,
         borderColor: colors.brand,
         opacity,
+        transform: [{ scale }],
       }}
     />
   );
 }
 
-function StatusFlank({ label, value }: { label: string; value: string }) {
+function StatusFlank({ label, value, align }: { label: string; value: string; align: 'left' | 'right' }) {
   return (
-    <View style={styles.flank}>
+    <View style={[styles.flank, { alignItems: align === 'left' ? 'flex-start' : 'flex-end' }]}>
       <Text style={styles.flankLabel}>{label}</Text>
       <Text style={styles.flankValue}>{value}</Text>
     </View>
   );
 }
 
-export default function GoLiveButton({ narrating, sharing, onPress }: GoLiveButtonProps) {
+export default function GoLiveButton({ playing, narrating, sharing, onPress }: GoLiveButtonProps) {
   const { animatedStyle, onPressIn, onPressOut } = usePress();
 
   return (
     <View style={styles.container}>
-      <StatusFlank label="Narrating" value={narrating ? 'ON' : 'OFF'} />
+      <StatusFlank label="Narrating" value={narrating ? 'ON' : 'OFF'} align="left" />
 
       <View style={styles.center}>
-        <View style={styles.arcsWrap}>
-          <SignalArc delay={0} size={96} />
-          <SignalArc delay={300} size={112} />
+        <View style={styles.arcsWrap} pointerEvents="none">
+          <SignalArc delay={0} size={92} />
+          <SignalArc delay={600} size={92} />
         </View>
-        <Animated.View style={[animatedStyle, glowShadow(colors.brand, 40)]}>
+        <Animated.View style={[animatedStyle, glowShadow(colors.brand, 36)]}>
           <Pressable onPress={onPress} onPressIn={onPressIn} onPressOut={onPressOut} style={styles.button}>
-            <Text style={styles.buttonLabel}>ASIDE</Text>
+            {playing ? (
+              <Pause size={26} color={colors.white} fill={colors.white} />
+            ) : (
+              <Play size={26} color={colors.white} fill={colors.white} style={{ marginLeft: 2 }} />
+            )}
           </Pressable>
         </Animated.View>
-        <Text style={styles.goLiveText}>GO LIVE</Text>
       </View>
 
-      <StatusFlank label="Sharing" value={sharing ? 'ACTIVE' : 'OFF'} />
+      <StatusFlank label="Sharing" value={sharing ? 'ACTIVE' : 'OFF'} align="right" />
     </View>
   );
 }
@@ -76,19 +89,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
   },
   center: {
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
+    width: 92,
+    height: 92,
   },
   arcsWrap: {
     position: 'absolute',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 120,
-    height: 120,
-    top: -24,
+    width: 92,
+    height: 92,
   },
   button: {
     width: 72,
@@ -98,24 +112,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  buttonLabel: {
-    fontFamily: fonts.mono700,
-    fontSize: textSize.xs,
-    fontWeight: '700',
-    letterSpacing: 2,
-    color: colors.white,
-  },
-  goLiveText: {
-    fontFamily: fonts.mono700,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-    color: colors.textPrimary,
-    textTransform: 'uppercase',
-  },
   flank: {
-    alignItems: 'center',
-    gap: 4,
+    gap: 3,
+    minWidth: 64,
   },
   flankLabel: {
     fontFamily: fonts.mono700,
@@ -126,9 +125,9 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
   flankValue: {
-    fontFamily: fonts.sans600,
-    fontSize: textSize['2xs'],
-    fontWeight: '600',
+    fontFamily: fonts.sans700,
+    fontSize: textSize.sm,
+    fontWeight: '700',
     color: colors.textSecondary,
   },
 });

@@ -10,7 +10,7 @@ export interface PersonalityData {
   slug: string;
   theme: string;
   name: string;
-  glyph: string;
+
   voice: string;
   tagline: string;
   sampleLine: string;
@@ -34,7 +34,7 @@ export const personalities: PersonalityData[] = [
     slug: 'hype-man',
     theme: 'hype',
     name: 'Hype Man',
-    glyph: '⚡',
+
     voice: 'Nova',
     tagline: 'Championship energy for every moment',
     sampleLine: "AYO they're BACK and they brought the FUEL, let's GOOO!",
@@ -48,7 +48,7 @@ export const personalities: PersonalityData[] = [
     slug: 'goth-mommy',
     theme: 'goth',
     name: 'Goth Mommy',
-    glyph: '🦧',
+
     voice: 'Asteria',
     tagline: 'Darkly glamorous, fiercely comforting',
     sampleLine: 'Look at you, my little raven — returning with your potion of warmth.',
@@ -62,7 +62,7 @@ export const personalities: PersonalityData[] = [
     slug: 'epic-quest-narrator',
     theme: 'quest',
     name: 'Epic Quest Narrator',
-    glyph: '⚔️',
+
     voice: 'Orion',
     tagline: 'Your day, reframed as a grand saga',
     sampleLine: 'Lo! The hero returns from the Bean Mines, sacred elixir in hand.',
@@ -103,5 +103,74 @@ export const liveLines: Record<string, string[]> = {
     'Lo! The hero returns from the Bean Mines, sacred elixir in hand.',
     'Quest updated: the Stapler of Binding has been recovered at last.',
     'The morning campaign begins anew. Fortune favors the caffeinated.',
+  ],
+};
+
+export interface VisionThought {
+  scene: string;
+  heard: string;
+  reasoning: string;
+}
+
+// What the model "sees / hears / thinks" — the perception → reasoning trace shown
+// on the Vision screen. Cycles like liveLines; real data can replace it later.
+export const visionThoughts: Record<string, VisionThought[]> = {
+  'hype-man': [
+    {
+      scene: 'Someone strides through the doorway holding a coffee cup.',
+      heard: '"Alright, let’s get into it."',
+      reasoning: 'Entrance detected. This is a BIG moment — amplify the arrival like a champion walking out to a roaring crowd.',
+    },
+    {
+      scene: 'A person sits at a cluttered desk and opens a laptop.',
+      heard: '(keys clacking)',
+      reasoning: 'Work is starting. Frame the mundane setup as the opening play of a championship game.',
+    },
+    {
+      scene: 'A hand reaches for a stapler among scattered papers.',
+      heard: '(quiet shuffling)',
+      reasoning: 'Tiny action, huge energy. Treat finding the stapler as a clutch, game-winning grab.',
+    },
+  ],
+  'goth-mommy': [
+    {
+      scene: 'A figure returns to a dim room, a warm drink in hand.',
+      heard: '"...finally."',
+      reasoning: 'A small act of self-care. Validate it tenderly, wrapped in dark, soothing affection.',
+    },
+    {
+      scene: 'Someone rests their head briefly against their hand.',
+      heard: '(a soft sigh)',
+      reasoning: 'Fatigue noticed. Offer quiet comfort — reassure them they are doing beautifully.',
+    },
+    {
+      scene: 'A candle flickers beside a closed notebook.',
+      heard: '(silence)',
+      reasoning: 'Calm scene. Speak softly of rest and small victories found in the shadows.',
+    },
+  ],
+  'epic-quest-narrator': [
+    {
+      scene: 'A hero crosses the threshold bearing a steaming chalice.',
+      heard: '"Okay, here we go."',
+      reasoning: 'The champion returns from the Bean Mines. Elevate the arrival into legend.',
+    },
+    {
+      scene: 'A wanderer surveys a desk strewn with ancient scrolls.',
+      heard: '(parchment rustling)',
+      reasoning: 'The quest board awaits. Frame the day’s tasks as a grand campaign.',
+    },
+    {
+      scene: 'A hand grasps a small metal artifact among the clutter.',
+      heard: '(a faint clink)',
+      reasoning: 'The Stapler of Binding is recovered. Announce the deed with due grandeur.',
+    },
+  ],
+  default: [
+    {
+      scene: 'A person moves through a softly lit room.',
+      heard: '(ambient sound)',
+      reasoning: 'Reading the scene and shaping a line that fits the chosen character.',
+    },
   ],
 };

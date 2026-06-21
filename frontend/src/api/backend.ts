@@ -16,6 +16,7 @@ export interface BackendHandlers {
   onStatus?: (connected: boolean) => void;
   onState?: (state: BackendState) => void;
   onLine?: (line: { text: string; personality?: string }) => void;
+  onFrame?: (dataUri: string) => void;
   onCue?: (name: string) => void;
   onVoice?: (audioBase64: string, mime: string) => void;
 }
@@ -66,6 +67,11 @@ function open(): void {
           text: String(msg.text ?? ''),
           personality: msg.personality as string | undefined,
         });
+        break;
+      case 'frame':
+        handlers.onFrame?.(
+          `data:${String(msg.mime ?? 'image/jpeg')};base64,${String(msg.data ?? '')}`,
+        );
         break;
       case 'cue':
         handlers.onCue?.(String(msg.name ?? ''));

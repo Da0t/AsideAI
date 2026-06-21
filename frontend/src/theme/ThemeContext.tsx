@@ -1,16 +1,29 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import { PersonalityTheme, getTheme } from './personalities';
-import { personalities, PersonalityData } from '../data/personalities';
+import { personalities, liveLines, PersonalityData } from '../data/personalities';
 import * as backend from '../api/backend';
 import { AudioManager } from '../audio/AudioManager';
+
+export interface LineEntry {
+  id: string;
+  text: string;
+  slug: string;
+  at: number;
+}
 
 interface ThemeContextValue {
   activeSlug: string;
   setActiveSlug: (slug: string) => void;
   activePersonality: PersonalityData;
   activeTheme: PersonalityTheme;
+  /** Active personality's narration mode. */
   mode: string;
+  /** Set the active personality's mode. */
   setMode: (mode: string) => void;
+  /** Read any personality's mode. */
+  modeFor: (slug: string) => string;
+  /** Set a specific personality's mode. */
+  setModeFor: (slug: string, mode: string) => void;
   playing: boolean;
   setPlaying: (playing: boolean) => void;
   togglePlaying: () => void;
@@ -20,11 +33,17 @@ interface ThemeContextValue {
   connected: boolean;
   /** Latest narration line pushed by the backend (null until one arrives). */
   liveLine: string | null;
+  /** Rolling log of narration lines (the conversation tracker). */
+  lineHistory: LineEntry[];
+  /** Latest camera frame from the wearable, as a data URI (null until one arrives). */
+  cameraFrame: string | null;
   /** Fire a manual cue (tells the backend + plays the local SFX). */
   fireCue: (cueId: string) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
+
+const DEFAULT_MODE = 'chatty';
 
 // Builder voice display-name -> Deepgram Aura voice id (best-effort mapping).
 const VOICE_TO_DEEPGRAM: Record<string, string> = {
@@ -35,7 +54,6 @@ const VOICE_TO_DEEPGRAM: Record<string, string> = {
   atlas: 'aura-zeus-en',
 };
 
-// Build a backend personality bundle from the UI's PersonalityData.
 function toBackendBundle(p: PersonalityData): Record<string, unknown> {
   return {
     name: p.name,
@@ -50,19 +68,38 @@ function toBackendBundle(p: PersonalityData): Record<string, unknown> {
   };
 }
 
+// A few recent entries so the conversation tracker looks alive before any
+// backend lines arrive. Frontend-only demo seed.
+function seedHistory(): LineEntry[] {
+  const now = Date.now();
+  const picks: { slug: string; text: string; agoMin: number }[] = [
+    { slug: 'goth-mommy', text: liveLines['goth-mommy'][0], agoMin: 2 },
+    { slug: 'hype-man', text: liveLines['hype-man'][1], agoMin: 7 },
+    { slug: 'epic-quest-narrator', text: liveLines['epic-quest-narrator'][0], agoMin: 16 },
+    { slug: 'goth-mommy', text: liveLines['goth-mommy'][2], agoMin: 31 },
+  ];
+  return picks.map((p, i) => ({ id: `seed-${i}`, text: p.text, slug: p.slug, at: now - p.agoMin * 60000 }));
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [allPersonalities, setAllPersonalities] = useState<PersonalityData[]>(personalities);
   const [activeSlug, setActiveSlugLocal] = useState('goth-mommy');
-  const [mode, setModeLocal] = useState('chatty');
+  const [modeBySlug, setModeBySlug] = useState<Record<string, string>>(() =>
+    Object.fromEntries(personalities.map((p) => [p.slug, DEFAULT_MODE])),
+  );
   const [playing, setPlayingLocal] = useState(true);
   const [connected, setConnected] = useState(false);
   const [liveLine, setLiveLine] = useState<string | null>(null);
+  const [lineHistory, setLineHistory] = useState<LineEntry[]>(seedHistory);
+  const [cameraFrame, setCameraFrame] = useState<string | null>(null);
 
-  // Mirror `playing` into a ref so togglePlaying reads the latest without deps.
+  // Refs so socket handlers/setters read the latest without re-subscribing.
   const playingRef = useRef(playing);
-  useEffect(() => {
-    playingRef.current = playing;
-  }, [playing]);
+  const activeSlugRef = useRef(activeSlug);
+  const modeRef = useRef(modeBySlug);
+  useEffect(() => { playingRef.current = playing; }, [playing]);
+  useEffect(() => { activeSlugRef.current = activeSlug; }, [activeSlug]);
+  useEffect(() => { modeRef.current = modeBySlug; }, [modeBySlug]);
 
   // One backend connection + audio engine, set up on mount.
   useEffect(() => {
@@ -71,12 +108,21 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     backend.connect({
       onStatus: setConnected,
       onState: (s) => {
-        // Sync from the backend WITHOUT echoing back (avoids feedback loops).
         if (s.personality) setActiveSlugLocal(s.personality);
-        if (s.mode) setModeLocal(s.mode);
+        if (s.mode) {
+          const slug = s.personality ?? activeSlugRef.current;
+          setModeBySlug((prev) => ({ ...prev, [slug]: s.mode as string }));
+        }
         if (typeof s.running === 'boolean') setPlayingLocal(s.running);
       },
-      onLine: (l) => setLiveLine(l.text),
+      onLine: (l) => {
+        setLiveLine(l.text);
+        const slug = l.personality ?? activeSlugRef.current;
+        setLineHistory((prev) =>
+          [{ id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, text: l.text, slug, at: Date.now() }, ...prev].slice(0, 50),
+        );
+      },
+      onFrame: (uri) => setCameraFrame(uri),
       onCue: (name) => {
         void audio.fireCue(name);
       },
@@ -90,17 +136,24 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const activePersonality =
     allPersonalities.find((p) => p.slug === activeSlug) ?? allPersonalities[0];
   const activeTheme = getTheme(activePersonality.theme);
+  const mode = modeBySlug[activeSlug] ?? DEFAULT_MODE;
 
-  // User-facing setters update local state AND tell the backend.
+  const modeFor = useCallback((slug: string) => modeRef.current[slug] ?? DEFAULT_MODE, []);
+
+  const setModeFor = useCallback((slug: string, m: string) => {
+    setModeBySlug((prev) => ({ ...prev, [slug]: m }));
+    if (slug === activeSlugRef.current) backend.setMode(m);
+  }, []);
+
   const setActiveSlug = useCallback((slug: string) => {
     setActiveSlugLocal(slug);
     backend.setActivePersonality(slug);
+    backend.setMode(modeRef.current[slug] ?? DEFAULT_MODE);
   }, []);
 
   const setMode = useCallback((m: string) => {
-    setModeLocal(m);
-    backend.setMode(m);
-  }, []);
+    setModeFor(activeSlugRef.current, m);
+  }, [setModeFor]);
 
   const setPlaying = useCallback((p: boolean) => {
     setPlayingLocal(p);
@@ -118,6 +171,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const addPersonality = useCallback((p: PersonalityData) => {
     setAllPersonalities((list) => [...list, p]);
+    setModeBySlug((prev) => ({ ...prev, [p.slug]: DEFAULT_MODE }));
     setActiveSlugLocal(p.slug);
     backend.createCustomPersonality(toBackendBundle(p));
     backend.setActivePersonality(p.slug);
@@ -132,6 +186,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         activeTheme,
         mode,
         setMode,
+        modeFor,
+        setModeFor,
         playing,
         setPlaying,
         togglePlaying,
@@ -139,6 +195,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         addPersonality,
         connected,
         liveLine,
+        lineHistory,
+        cameraFrame,
         fireCue,
       }}
     >

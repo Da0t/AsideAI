@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ChevronDown, Ellipsis, Pause, Play } from 'lucide-react-native';
+import { ChevronDown, Eye, Pause, Play } from 'lucide-react-native';
 import Waveform from '../components/Waveform';
 import Chip from '../components/Chip';
 import CueButton from '../components/CueButton';
@@ -25,12 +25,9 @@ export default function LiveScreen() {
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Prefer the real backend narration line; fall back to the demo cycler when
-  // the backend hasn't pushed anything yet (offline / not yet narrating).
   const useBackendLine = liveLine != null;
   const displayLine = liveLine ?? lines[lineIdx];
 
-  // Demo cycler — only runs when NOT receiving live lines from the backend.
   useEffect(() => {
     if (useBackendLine || !playing) return;
     intervalRef.current = setInterval(() => {
@@ -44,7 +41,6 @@ export default function LiveScreen() {
     };
   }, [useBackendLine, playing, lines.length, fadeAnim]);
 
-  // Fade each new backend line in as it arrives.
   useEffect(() => {
     if (liveLine == null) return;
     fadeAnim.setValue(0);
@@ -71,16 +67,14 @@ export default function LiveScreen() {
           <ChevronDown size={24} color={colors.textPrimary} />
         </IconButton>
         <Chip variant="brand" live>
-          Narrating live
+          Playing
         </Chip>
-        <IconButton variant="ghost">
-          <Ellipsis size={22} color={colors.textPrimary} />
+        <IconButton variant="ghost" onPress={() => nav.navigate('Vision')}>
+          <Eye size={22} color={colors.textPrimary} />
         </IconButton>
       </View>
 
       <View style={styles.center}>
-        <Text style={styles.glyph}>{activePersonality.glyph}</Text>
-
         <Waveform bars={9} active={playing} height={34} barWidth={4} gap={5} color={t.accent} />
 
         <View style={styles.lineContainer}>
@@ -91,7 +85,7 @@ export default function LiveScreen() {
 
         <View style={styles.nameBlock}>
           <Text style={styles.name}>{activePersonality.name}</Text>
-          <Text style={styles.meta}>Voice · {activePersonality.voice} · music ducked</Text>
+          <Text style={styles.meta}>Voice -- {activePersonality.voice} -- music ducked</Text>
         </View>
       </View>
 
@@ -133,7 +127,6 @@ const styles = StyleSheet.create({
   heroWash: { position: 'absolute', top: 0, left: 0, right: 0, height: 300 },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 18, zIndex: 10 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 26, gap: 22, zIndex: 5 },
-  glyph: { fontSize: 54, lineHeight: 64 },
   lineContainer: { minHeight: 140, justifyContent: 'center', alignItems: 'center' },
   line: { fontFamily: fonts.display700, fontSize: 28, fontWeight: '700', lineHeight: 33, letterSpacing: -0.15, textAlign: 'center', color: colors.textPrimary },
   nameBlock: { alignItems: 'center' },

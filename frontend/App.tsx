@@ -21,6 +21,7 @@ import { ThemeProvider } from './src/theme/ThemeContext';
 import HomeScreen from './src/screens/HomeScreen';
 import BuilderScreen from './src/screens/BuilderScreen';
 import LiveScreen from './src/screens/LiveScreen';
+import VisionScreen from './src/screens/VisionScreen';
 import type { RootStackParamList } from './src/navigation/types';
 import { colors } from './src/theme/tokens';
 
@@ -73,6 +74,11 @@ export default function App() {
               name="Live"
               component={LiveScreen}
               options={{ animation: 'fade' }}
+            />
+            <Stack.Screen
+              name="Vision"
+              component={VisionScreen}
+              options={{ animation: 'slide_from_right' }}
             />
           </Stack.Navigator>
         </NavigationContainer>

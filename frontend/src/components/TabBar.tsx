@@ -13,15 +13,11 @@ export default function TabBar({ tabs, activeIndex, onChange }: TabBarProps) {
       {tabs.map((tab, i) => (
         <View key={tab} style={styles.tabWrap}>
           {i > 0 && <Text style={styles.dot}>·</Text>}
-          <Pressable onPress={() => onChange(i)} hitSlop={8}>
-            <Text
-              style={[
-                styles.tabText,
-                i === activeIndex ? styles.active : styles.inactive,
-              ]}
-            >
+          <Pressable onPress={() => onChange(i)} hitSlop={8} style={styles.tab}>
+            <Text style={[styles.tabText, i === activeIndex ? styles.active : styles.inactive]}>
               {tab}
             </Text>
+            {i === activeIndex && <View style={styles.underline} />}
           </Pressable>
         </View>
       ))}
@@ -42,21 +38,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
+  tab: {
+    alignItems: 'center',
+    gap: 4,
+  },
   dot: {
     color: colors.textMuted,
     fontSize: textSize.base,
-    marginHorizontal: 4,
+    marginHorizontal: 6,
   },
   tabText: {
-    fontFamily: fonts.sans600,
+    fontFamily: fonts.sans700,
     fontSize: textSize.sm,
-    letterSpacing: 0.3,
+    letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
   active: {
-    color: colors.textPrimary,
+    color: colors.brand,
   },
   inactive: {
     color: colors.textMuted,
+  },
+  underline: {
+    width: 18,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: colors.brand,
   },
 });

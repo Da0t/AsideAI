@@ -37,7 +37,6 @@ export default function BuilderScreen() {
       slug,
       theme: 'custom',
       name: name.trim(),
-      glyph: '✦',
       voice: voice?.name ?? 'Asteria',
       tagline: voice ? `Voice · ${voice.name}` : 'Custom narrator',
       sampleLine: desc || 'Your custom narrator is ready.',
@@ -66,9 +65,7 @@ export default function BuilderScreen() {
           <PersonalityCard
             theme="custom"
             name={name || 'Untitled'}
-            voice={voice?.name}
-            tagline={voice ? `Voice · ${voice.name}` : 'Pick a voice'}
-            glyph="✦"
+            voice={voice?.name ?? 'Pick a voice'}
           />
         </View>
 

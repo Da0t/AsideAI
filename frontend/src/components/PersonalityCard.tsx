@@ -1,6 +1,5 @@
 import { View, Text, Pressable, Animated, StyleSheet, ViewStyle } from 'react-native';
-import { useState, useRef } from 'react';
-import { Ellipsis, Play, Check, X, Pencil } from 'lucide-react-native';
+import { SlidersHorizontal } from 'lucide-react-native';
 import { usePress } from './usePress';
 import Chip from './Chip';
 import { colors, fonts, textSize, radii, shadow } from '../theme/tokens';
@@ -9,29 +8,24 @@ import { getTheme } from '../theme/personalities';
 interface PersonalityCardProps {
   name: string;
   theme?: string;
-  glyph?: string;
   voice?: string;
-  tagline?: string;
+  modeLabel?: string;
   active?: boolean;
-  onSelect?: () => void;
-  onPreview?: () => void;
+  onPress?: () => void;
   style?: ViewStyle;
 }
 
-function ActionButton({ icon, color, onPress }: { icon: React.ReactNode; color: string; onPress?: () => void }) {
-  return (
-    <Pressable onPress={onPress} style={[styles.actionBtn, { backgroundColor: color + '30' }]}>
-      {icon}
-    </Pressable>
-  );
-}
-
-export default function PersonalityCard({ name, theme = 'custom', glyph, voice, tagline, active = false, onSelect, onPreview, style }: PersonalityCardProps) {
+export default function PersonalityCard({
+  name,
+  theme = 'custom',
+  voice,
+  modeLabel,
+  active = false,
+  onPress,
+  style,
+}: PersonalityCardProps) {
   const { animatedStyle, onPressIn, onPressOut } = usePress(0.98);
   const t = getTheme(theme);
-  const [expanded, setExpanded] = useState(false);
-
-  const toggleExpand = () => setExpanded((e) => !e);
 
   return (
     <Animated.View
@@ -46,34 +40,28 @@ export default function PersonalityCard({ name, theme = 'custom', glyph, voice, 
         style,
       ]}
     >
-      <Pressable onPress={onSelect} onPressIn={onPressIn} onPressOut={onPressOut} style={styles.row}>
-        <View style={[styles.glyphWrap, { backgroundColor: t.accent + '25' }]}>
-          <Text style={styles.glyph}>{glyph}</Text>
-        </View>
+      <Pressable onPress={onPress} onPressIn={onPressIn} onPressOut={onPressOut} style={styles.row}>
+        <View style={[styles.avatar, { backgroundColor: t.accent }]} />
 
         <View style={styles.info}>
           <View style={styles.nameRow}>
             <Text style={styles.name} numberOfLines={1}>{name}</Text>
-            {active && <Chip variant="brand" live>LIVE</Chip>}
+            {active && <Chip variant="brand" live>PLAYING</Chip>}
           </View>
           <Text style={styles.meta} numberOfLines={1}>
-            {voice ? `VOICE · ${voice}` : tagline}
+            {voice ? `VOICE · ${voice}` : ''}
           </Text>
         </View>
 
-        <Pressable onPress={toggleExpand} hitSlop={12} style={styles.menuBtn}>
-          <Ellipsis size={20} color={colors.textMuted} />
-        </Pressable>
-      </Pressable>
-
-      {expanded && (
-        <View style={styles.actions}>
-          <ActionButton icon={<X size={18} color={colors.brand} />} color={colors.brand} />
-          <ActionButton icon={<Play size={18} color={t.accent} fill={t.accent} />} color={t.accent} onPress={onPreview} />
-          <ActionButton icon={<Check size={18} color={colors.success} />} color={colors.success} onPress={onSelect} />
-          <ActionButton icon={<Pencil size={18} color={colors.textSecondary} />} color={colors.textMuted} />
+        <View style={styles.right}>
+          {modeLabel && (
+            <View style={[styles.modePill, { borderColor: t.accent + '55' }]}>
+              <Text style={[styles.modeText, { color: t.accent }]}>{modeLabel}</Text>
+            </View>
+          )}
+          <SlidersHorizontal size={18} color={colors.textMuted} />
         </View>
-      )}
+      </Pressable>
     </Animated.View>
   );
 }
@@ -88,19 +76,13 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 14,
-    gap: 14,
+    padding: 12,
+    gap: 12,
   },
-  glyphWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  glyph: {
-    fontSize: 24,
-    lineHeight: 30,
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
   },
   info: {
     flex: 1,
@@ -127,23 +109,24 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     color: colors.textMuted,
   },
-  menuBtn: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actions: {
+  right: {
     flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 12,
-    paddingBottom: 14,
+    alignItems: 'center',
+    gap: 10,
   },
-  actionBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  modePill: {
+    paddingHorizontal: 10,
+    height: 24,
+    borderRadius: radii.pill,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  modeText: {
+    fontFamily: fonts.mono700,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
   },
 });
