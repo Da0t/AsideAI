@@ -1,3 +1,12 @@
+**Proper explanation here: https://aside-website.vercel.app/**
+
+
+
+
+
+
+
+
 # The Narrator
 
 > A Raspberry Pi wearable that watches a room in real time and narrates what's
