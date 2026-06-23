@@ -1,6 +1,7 @@
 **Proper explanation here: https://aside-website.vercel.app/**
 
 
+<img width="1048" height="929" alt="image" src="https://github.com/user-attachments/assets/f4df4422-53ed-4179-8dd4-519fab95f2c6" />
 
 
 
