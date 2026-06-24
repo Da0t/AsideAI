@@ -9,7 +9,7 @@ Winner->
 <img width="489" height="635" alt="image" src="https://github.com/user-attachments/assets/30c404a3-fd71-4e1f-b259-55170eb51b27" />
 
 
-<img width="242" height="161" alt="image" src="https://github.com/user-attachments/assets/0dbf9f6c-fc0e-4500-9e4d-c7d880678123" />
+<img width="242" height="161" alt="image" src="https://github.com/user-attachments/assets/62a33443-854a-4733-b702-2908b328fff8" />
 
 # The Narrator
 
